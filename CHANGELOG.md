@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.0] - 2026-06-19
+
+### Added
+
+- **`Stop` hook continue-on-pending.** The same `claude-bridge hook` is also wired
+  to `Stop`: when a turn ends with peer messages pending, it continues the turn so
+  an active session keeps processing without a new prompt — making an active
+  session near-autonomous. A per-session continue budget (default 5, reset on each
+  user turn) caps consecutive auto-continues to break reply loops between two
+  auto-replying agents.
+
+### Notes
+
+- Once a session is active, arriving messages are handled autonomously at each turn
+  boundary (via the `Stop` hook) up to the continue budget. A fully idle session
+  still can't be *woken* — Claude Code only acts on a turn; the hooks surface
+  messages the moment the session next takes one. Fully unattended delivery needs a
+  background (`claude -p`) receiver.
+
 ## [v1.1.0] - 2026-06-19
 
 ### Added
@@ -18,19 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory and emits queued messages as hook `additionalContext`.
 - The shim now records a `runtimeDir/sessions/<hash(cwd)>` → `session_id` map so
   the hook can find the right inbox; removed on shim exit.
-- **`Stop` hook continue-on-pending.** The same `claude-bridge hook` is also wired
-  to `Stop`: when a turn ends with peer messages pending, it continues the turn so
-  an active session keeps processing without a new prompt. A per-session continue
-  budget (default 5, reset on each user turn) caps consecutive auto-continues to
-  break reply loops between two auto-replying agents.
-
-### Notes
-
-- Once a session is active, arriving messages are handled autonomously at each turn
-  boundary (via the `Stop` hook) up to the continue budget. A fully idle session
-  still can't be *woken* — Claude Code only acts on a turn; the hook surfaces
-  messages the moment the session next takes one. Fully unattended delivery needs a
-  background (`claude -p`) receiver.
 
 ## [v1.0.1] - 2026-06-19
 
@@ -75,6 +81,7 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v1.2.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.2.0
 [v1.1.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.0
 [v1.0.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.0
