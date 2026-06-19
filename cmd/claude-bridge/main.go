@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"github.com/asd-noor/claude-bridge/internal/config"
 )
@@ -115,8 +116,22 @@ func dispatch(sub string, args []string, cfg config.Config, logger *slog.Logger)
 
 // runVersion prints the build version.
 func runVersion() int {
-	fmt.Printf("claude-bridge %s\n", version)
+	fmt.Printf("claude-bridge %s\n", buildVersion())
 	return 0
+}
+
+// buildVersion resolves the version to report. A linker-injected value (from
+// `mise run build`) wins; otherwise it falls back to the module version
+// embedded by `go install module@vX.Y.Z`, and finally the "dev" default.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok &&
+		info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
 }
 
 // newLogger builds a slog.Logger writing to stderr, honoring config format and

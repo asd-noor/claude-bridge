@@ -38,6 +38,21 @@ mise run build
 
 This compiles the binary to `./bin/claude-bridge`.
 
+Install it to `~/.local/bin` (ensure that is on your `PATH`):
+
+```sh
+mise run install
+```
+
+Or install straight from the module with the Go toolchain (drops the binary in
+`$(go env GOBIN)`, usually `~/go/bin`):
+
+```sh
+go install github.com/asd-noor/claude-bridge/cmd/claude-bridge@latest
+```
+
+Verify with `claude-bridge version`.
+
 ## Run
 
 Start the daemon (it also auto-spawns on first shim connect, so this is optional):
@@ -60,9 +75,30 @@ or to `~/.claude/.mcp.json`:
 }
 ```
 
+Or register it from the CLI (`--scope user` makes it available in every project,
+which is the point of a cross-session bridge):
+
+```sh
+claude mcp add --scope user claude-bridge -- claude-bridge mcp
+```
+
 That is the whole integration: no port, no socket path, no hooks. Claude Code spawns
 `claude-bridge mcp` per session; the shim registers the session with the daemon and
 forwards bridge tool calls and push notifications.
+
+### As a plugin (tools + the bridge-awareness skill)
+
+The repo ships a Claude Code plugin under `plugin/`, listed in the marketplace
+manifest `.claude-plugin/marketplace.json`. Installing the plugin wires the MCP shim
+**and** the `bridge-awareness` skill that teaches Claude when to reach for the bridge:
+
+```sh
+/plugin marketplace add /path/to/claude-bridge
+/plugin install claude-bridge@claude-bridge
+```
+
+The plugin's bundled `.mcp.json` and `skills/` load automatically once enabled. The
+`claude-bridge` binary still needs to be on your `PATH` (step above).
 
 ## CLI subcommands
 

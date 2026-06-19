@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "claude-bridge",
+  "owner": {
+    "name": "Asaduzzaman Noor",
+    "email": "contact@asaduzzaman-noor.com"
+  },
+  "description": "Local message broker bridging Claude Code sessions across projects on the same machine.",
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "name": "claude-bridge",
+      "source": "./plugin",
+      "displayName": "Claude Bridge",
+      "description": "Coordinate Claude Code sessions across projects via bridge tools (list_peers, send_message, broadcast, poll_messages, get_peer_info) plus the bridge-awareness skill.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Asaduzzaman Noor",
+        "email": "contact@asaduzzaman-noor.com"
+      },
+      "homepage": "https://github.com/asd-noor/claude-bridge",
+      "repository": "https://github.com/asd-noor/claude-bridge",
+      "license": "GPL-3.0-or-later",
+      "keywords": ["mcp", "coordination", "multi-agent", "broker"]
+    }
+  ]
+}
