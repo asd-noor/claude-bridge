@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#MISE description="Build the claude-bridge binary into ./bin"
+set -euo pipefail
+
+cd "${MISE_PROJECT_ROOT:-.}"
+
+# Derive the version from git: an exact tag if HEAD is tagged, else the short
+# commit; a "-dirty" suffix marks an uncommitted tree. Override with $VERSION.
+if [ -z "${VERSION:-}" ]; then
+    DIRTY=""
+    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+        DIRTY="-dirty"
+    fi
+    TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || true)
+    if [ -n "$TAG" ]; then
+        VERSION="${TAG}${DIRTY}"
+    else
+        COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        VERSION="${COMMIT}${DIRTY}"
+    fi
+fi
+
+echo "building ${VERSION} ..."
+go build -trimpath -buildvcs=false \
+    -ldflags="-s -w -X main.version=${VERSION}" \
+    -o ./bin/claude-bridge ./cmd/claude-bridge
+echo "built ./bin/claude-bridge"

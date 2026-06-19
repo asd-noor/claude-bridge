@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Build and install claude-bridge to ~/.local/bin"
+#MISE depends=["build"]
+set -euo pipefail
+
+cd "${MISE_PROJECT_ROOT:-.}"
+
+dest="${HOME}/.local/bin"
+install -d "$dest"
+install -m 0755 ./bin/claude-bridge "$dest/claude-bridge"
+echo "installed claude-bridge to $dest/claude-bridge"

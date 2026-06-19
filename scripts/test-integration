@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Run the integration test suite (build tag: integration)"
+set -euo pipefail
+
+cd "${MISE_PROJECT_ROOT:-.}"
+
+go test -tags integration ./...

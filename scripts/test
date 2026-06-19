@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Run the unit test suite"
+set -euo pipefail
+
+cd "${MISE_PROJECT_ROOT:-.}"
+
+go test ./...

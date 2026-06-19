@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Build and run claude-bridge, passing args through"
+#USAGE arg "[args]" var=#true help="Arguments forwarded to claude-bridge (e.g. serve, status, mcp)"
+set -euo pipefail
+
+cd "${MISE_PROJECT_ROOT:-.}"
+
+go run ./cmd/claude-bridge "$@"

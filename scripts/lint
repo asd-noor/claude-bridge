@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Vet the code and check gofmt formatting"
+set -euo pipefail
+
+cd "${MISE_PROJECT_ROOT:-.}"
+
+go vet ./...
+
+unformatted="$(gofmt -l .)"
+if [ -n "${unformatted}" ]; then
+  echo "gofmt found unformatted files:" >&2
+  echo "${unformatted}" >&2
+  echo "run: gofmt -w ." >&2
+  exit 1
+fi
+echo "lint ok"
