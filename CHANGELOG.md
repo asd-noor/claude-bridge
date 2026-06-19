@@ -5,10 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v1.2.0] - 2026-06-19
+## [v1.1.0] - 2026-06-19
 
 ### Added
 
+- **Automatic message delivery via a `UserPromptSubmit` hook.** The plugin now
+  ships a hook running `claude-bridge hook`, which injects pending peer messages
+  into the receiving session's context on each turn — no manual `poll_messages`.
+  This works around Claude Code not surfacing MCP `notifications/message` to the
+  model.
+- `claude-bridge hook` subcommand: resolves the session for the current
+  directory and emits queued messages as hook context.
+- The shim now records a `runtimeDir/sessions/<hash(cwd)>` → `session_id` map so
+  the hook can find the right inbox; removed on shim exit.
 - **`Stop` hook continue-on-pending.** The same `claude-bridge hook` is also wired
   to `Stop`: when a turn ends with peer messages pending, it continues the turn so
   an active session keeps processing without a new prompt — making an active
@@ -23,20 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still can't be *woken* — Claude Code only acts on a turn; the hooks surface
   messages the moment the session next takes one. Fully unattended delivery needs a
   background (`claude -p`) receiver.
-
-## [v1.1.0] - 2026-06-19
-
-### Added
-
-- **Automatic message delivery via a `UserPromptSubmit` hook.** The plugin now
-  ships a hook running `claude-bridge hook`, which injects pending peer messages
-  into the receiving session's context on each turn — no manual `poll_messages`.
-  This works around Claude Code not surfacing MCP `notifications/message` to the
-  model.
-- `claude-bridge hook` subcommand: resolves the session for the current
-  directory and emits queued messages as hook `additionalContext`.
-- The shim now records a `runtimeDir/sessions/<hash(cwd)>` → `session_id` map so
-  the hook can find the right inbox; removed on shim exit.
 
 ## [v1.0.1] - 2026-06-19
 
@@ -81,7 +76,6 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
-[v1.2.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.2.0
 [v1.1.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.0
 [v1.0.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.0
