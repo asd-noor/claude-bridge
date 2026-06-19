@@ -157,14 +157,24 @@ session to be reaped after `SessionTTL` by the run loop's cleanup tick.
 - **Poll.** `poll_messages` lets the model drain its inbox explicitly — the manual
   fallback, and what the hook calls under the hood.
 
-Because all three read the same inbox, a message is delivered once: whoever drains
-first (usually the hook) gets it. Broadcasts are rate-limited per sender with a
-token bucket (`BroadcastBurst` / `BroadcastRefill`).
+The same `claude-bridge hook` is also wired to the **`Stop`** event: when a turn
+ends with messages pending, it returns `{"decision":"block","reason": …}` so the
+session continues and processes them without a new user prompt — making an active
+session near-autonomous. A per-session **continue budget** (default 5, stored at
+`sessions/<hash>.cont`, reset on each user turn) caps consecutive auto-continues
+so two auto-replying agents cannot ping-pong forever; when exhausted the inbox is
+left intact for the next user turn.
 
-**Limit.** A fully idle interactive session cannot be *woken* — Claude Code only
-acts on a user turn (or a hook firing on one). The hook makes messages appear the
-moment the user next interacts; true unattended delivery needs a background
-(`claude -p`) receiver that polls.
+Because all paths read the same inbox, a message is delivered once: whoever drains
+first gets it. Broadcasts are rate-limited per sender with a token bucket
+(`BroadcastBurst` / `BroadcastRefill`).
+
+**Limit.** An *active* session is near-autonomous: the `Stop` hook keeps it
+processing pending messages turn-over-turn (within the continue budget). But a
+*fully idle* session cannot be **woken** — Claude Code only acts on a turn, and
+nothing in the host starts one from an external event. The hooks surface messages
+the moment the session next takes a turn; truly unattended delivery needs a
+background (`claude -p`) receiver that polls.
 
 **Session map.** So the hook (a separate process) can find the right inbox, the
 shim writes `runtimeDir/sessions/<sha256(cwd)>` = its `session_id` on register and

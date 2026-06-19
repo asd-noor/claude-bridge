@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/asd-noor/claude-bridge/internal/broker"
@@ -13,64 +14,114 @@ import (
 	"github.com/asd-noor/claude-bridge/internal/daemonrpc"
 )
 
-// hookEventName is the Claude Code hook event this subcommand answers.
-const hookEventName = "UserPromptSubmit"
+// Hook event names this subcommand answers (read from the hook payload).
+const (
+	eventUserPromptSubmit = "UserPromptSubmit"
+	eventStop             = "Stop"
+)
 
-// hookInput is the subset of the UserPromptSubmit hook stdin payload we use.
+// maxStopContinues bounds how many times the Stop hook will auto-continue a
+// session to process peer messages between user turns. It is the loop guard
+// that stops two auto-replying agents from ping-ponging forever; a real user
+// turn resets the budget.
+const maxStopContinues = 5
+
+// hookInput is the subset of the hook stdin payload we use.
 type hookInput struct {
-	CWD string `json:"cwd"`
+	CWD           string `json:"cwd"`
+	HookEventName string `json:"hook_event_name"`
 }
 
-// hookOutput is the UserPromptSubmit hook response that injects context.
-type hookOutput struct {
-	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+// promptOutput injects context on a UserPromptSubmit turn.
+type promptOutput struct {
+	HookSpecificOutput promptSpecific `json:"hookSpecificOutput"`
 }
 
-type hookSpecificOutput struct {
+type promptSpecific struct {
 	HookEventName     string `json:"hookEventName"`
 	AdditionalContext string `json:"additionalContext"`
 }
 
-// runHook implements `claude-bridge hook`: invoked by Claude Code's
-// UserPromptSubmit hook, it drains the bridge inbox for the session running in
-// the current working directory and injects any pending peer messages into the
-// turn as additionalContext. It always exits 0 and stays silent when there is
-// nothing to inject, so it never disrupts the user's prompt.
+// stopOutput blocks a Stop so the session continues and processes the messages
+// carried in reason.
+type stopOutput struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
+}
+
+// runHook implements `claude-bridge hook`, wired to both UserPromptSubmit and
+// Stop. It resolves the bridge session owning the cwd and delivers pending peer
+// messages — by injecting context on a user turn, or by continuing the turn at
+// Stop so an active session keeps draining without a new prompt. It always exits
+// 0 and stays silent when there is nothing to do.
 func runHook(cfg config.Config, logger *slog.Logger) int {
-	cwd := hookCWD(logger)
-	if cwd == "" {
+	in := readHookInput(logger)
+	if in.CWD == "" {
 		return 0
 	}
-
-	sessionID, ok := readSessionMap(cfg, cwd)
+	sessionID, ok := readSessionMap(cfg, in.CWD)
 	if !ok {
 		return 0 // no shim registered for this directory
 	}
+
+	if in.HookEventName == eventStop {
+		return stopHook(cfg, in.CWD, sessionID, logger)
+	}
+	return promptHook(cfg, in.CWD, sessionID, logger)
+}
+
+// promptHook drains the inbox and injects pending messages as additionalContext.
+// A user turn also resets the Stop continue budget.
+func promptHook(cfg config.Config, cwd, sessionID string, logger *slog.Logger) int {
+	resetContinueBudget(cfg, cwd)
 
 	msgs, ok := drainInbox(cfg, sessionID, logger)
 	if !ok || len(msgs) == 0 {
 		return 0
 	}
-
-	emitContext(formatMessages(msgs), logger)
+	emit(promptOutput{HookSpecificOutput: promptSpecific{
+		HookEventName:     eventUserPromptSubmit,
+		AdditionalContext: formatMessages(msgs),
+	}}, logger)
 	return 0
 }
 
-// hookCWD reads the working directory from the hook's stdin payload, falling
-// back to the process cwd.
-func hookCWD(logger *slog.Logger) string {
+// stopHook continues an ending turn when peer messages are pending, so an active
+// session processes them without a new user prompt. The continue budget (reset
+// on each user turn) caps consecutive auto-continues to break reply loops; when
+// it is exhausted the inbox is left intact for the next user turn to surface.
+func stopHook(cfg config.Config, cwd, sessionID string, logger *slog.Logger) int {
+	if readContinueBudget(cfg, cwd) <= 0 {
+		return 0 // loop guard: stop and wait for a user turn
+	}
+
+	msgs, ok := drainInbox(cfg, sessionID, logger)
+	if !ok || len(msgs) == 0 {
+		return 0 // nothing pending: allow the stop
+	}
+
+	decrementContinueBudget(cfg, cwd)
+	emit(stopOutput{
+		Decision: "block",
+		Reason:   formatMessages(msgs),
+	}, logger)
+	return 0
+}
+
+// readHookInput parses the hook stdin payload, falling back to the process cwd.
+func readHookInput(logger *slog.Logger) hookInput {
+	var in hookInput
 	if raw, err := io.ReadAll(os.Stdin); err == nil && len(raw) > 0 {
-		var in hookInput
-		if err := json.Unmarshal(raw, &in); err == nil && in.CWD != "" {
-			return in.CWD
+		_ = json.Unmarshal(raw, &in)
+	}
+	if in.CWD == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			in.CWD = cwd
+		} else {
+			logger.Debug("hook getwd", "err", err)
 		}
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		logger.Debug("hook getwd", "err", err)
-		return ""
-	}
-	return cwd
+	return in
 }
 
 // readSessionMap resolves the bridge session_id owning projectPath, if any.
@@ -105,8 +156,8 @@ func drainInbox(cfg config.Config, sessionID string, logger *slog.Logger) ([]bro
 	return res.Messages, true
 }
 
-// formatMessages renders pending messages into a context block instructing the
-// model how to act on and reply to them.
+// formatMessages renders pending messages into a block instructing the model how
+// to act on and reply to them.
 func formatMessages(msgs []broker.Message) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[claude-bridge] %d new message(s) from peer Claude Code session(s). "+
@@ -124,13 +175,42 @@ func formatMessages(msgs []broker.Message) string {
 	return b.String()
 }
 
-// emitContext writes the additionalContext hook response to stdout.
-func emitContext(text string, logger *slog.Logger) {
-	out := hookOutput{HookSpecificOutput: hookSpecificOutput{
-		HookEventName:     hookEventName,
-		AdditionalContext: text,
-	}}
-	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+// continueBudgetPath is the per-cwd Stop continue-budget file.
+func continueBudgetPath(cfg config.Config, cwd string) string {
+	return config.SessionMapPath(cfg, cwd) + ".cont"
+}
+
+// readContinueBudget returns the remaining Stop continues, defaulting to the max
+// when no budget has been recorded yet.
+func readContinueBudget(cfg config.Config, cwd string) int {
+	data, err := os.ReadFile(continueBudgetPath(cfg, cwd))
+	if err != nil {
+		return maxStopContinues
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return maxStopContinues
+	}
+	return n
+}
+
+// resetContinueBudget restores the full continue budget on a user turn.
+func resetContinueBudget(cfg config.Config, cwd string) {
+	writeContinueBudget(cfg, cwd, maxStopContinues)
+}
+
+// decrementContinueBudget records one consumed continue.
+func decrementContinueBudget(cfg config.Config, cwd string) {
+	writeContinueBudget(cfg, cwd, readContinueBudget(cfg, cwd)-1)
+}
+
+func writeContinueBudget(cfg config.Config, cwd string, n int) {
+	_ = os.WriteFile(continueBudgetPath(cfg, cwd), []byte(strconv.Itoa(n)), pidFileMode)
+}
+
+// emit writes a hook response as JSON to stdout.
+func emit(v any, logger *slog.Logger) {
+	if err := json.NewEncoder(os.Stdout).Encode(v); err != nil {
 		logger.Debug("hook encode", "err", err)
 	}
 }

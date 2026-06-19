@@ -18,12 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory and emits queued messages as hook `additionalContext`.
 - The shim now records a `runtimeDir/sessions/<hash(cwd)>` → `session_id` map so
   the hook can find the right inbox; removed on shim exit.
+- **`Stop` hook continue-on-pending.** The same `claude-bridge hook` is also wired
+  to `Stop`: when a turn ends with peer messages pending, it continues the turn so
+  an active session keeps processing without a new prompt. A per-session continue
+  budget (default 5, reset on each user turn) caps consecutive auto-continues to
+  break reply loops between two auto-replying agents.
 
 ### Notes
 
-- A fully idle session still can't be *woken* by an incoming message — Claude Code
-  only acts on a user turn; the hook surfaces messages the moment the user next
-  interacts. Unattended delivery needs a background (`claude -p`) receiver.
+- Once a session is active, arriving messages are handled autonomously at each turn
+  boundary (via the `Stop` hook) up to the continue budget. A fully idle session
+  still can't be *woken* — Claude Code only acts on a turn; the hook surfaces
+  messages the moment the session next takes one. Fully unattended delivery needs a
+  background (`claude -p`) receiver.
 
 ## [v1.0.1] - 2026-06-19
 
