@@ -134,9 +134,12 @@ deadlock on it.
 
 **Session.** The shim calls `register_session` on startup → the broker mints a
 UUIDv7 `session_id`. Every inbound RPC carrying a `session_id` calls
-`broker.Touch` to refresh `LastSeen` before dispatch — there is no heartbeat. On
-a clean shim exit the shim calls `unregister_session`; a dirty exit leaves the
-session to be reaped after `SessionTTL` by the run loop's cleanup tick.
+`broker.Touch` to refresh `LastSeen` before dispatch — there is no heartbeat. A
+session's lifetime is bound to its shim's connection: the daemon records the
+`session_id` a connection uses and unregisters it the moment that connection
+drops (clean exit or dirty `kill`), so the peer list reflects only live shims.
+`SessionTTL` cleanup remains as a backstop for any session that somehow outlives
+its connection.
 
 **Delivery.** Every message lands in the recipient's inbox (capacity
 `MaxInboxSize`, oldest evicted). Three ways it reaches the receiving Claude:

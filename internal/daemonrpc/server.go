@@ -146,9 +146,23 @@ func (s *Server) Serve(ln net.Listener) error {
 
 // handleConn services one connection's frames until EOF or error, maintaining
 // the active-connection count around its lifetime.
+//
+// A session's lifetime is its shim's connection: when the connection that a
+// session uses drops, the session is unregistered immediately rather than left
+// for SessionTTL to reap. This keeps the peer list reflecting live shims even
+// when a shim exits dirty (e.g. a plugin reload kills it with no clean
+// unregister). Connections that carry no session_id (e.g. `status`) bind nothing
+// and reap nothing.
 func (s *Server) handleConn(conn net.Conn) {
 	s.active.Add(1)
-	defer s.connClosed(conn)
+
+	var boundSession string
+	defer func() {
+		if boundSession != "" {
+			s.broker.UnregisterSession(boundSession)
+		}
+		s.connClosed(conn)
+	}()
 
 	for {
 		raw, err := ReadFrame(conn)
@@ -164,6 +178,7 @@ func (s *Server) handleConn(conn net.Conn) {
 
 		if req.SessionID != "" {
 			s.broker.Touch(req.SessionID)
+			boundSession = req.SessionID
 		}
 
 		// Subscribe owns the connection for its lifetime; everything else is a
@@ -173,10 +188,35 @@ func (s *Server) handleConn(conn net.Conn) {
 			return
 		}
 
+		if req.Method == MethodRegister {
+			id, err := s.handleRegister(conn, req.Params)
+			if err != nil {
+				return
+			}
+			if id != "" {
+				boundSession = id
+			}
+			continue
+		}
+
 		if err := s.dispatch(conn, req); err != nil {
 			return
 		}
 	}
+}
+
+// handleRegister registers a session, writes the response, and returns the new
+// session_id so the connection can bind it for reap-on-disconnect. An empty id
+// with a nil error means a logical failure was reported to the client and the
+// connection should continue.
+func (s *Server) handleRegister(conn net.Conn, params json.RawMessage) (string, error) {
+	result, err := s.doRegister(params)
+	if err != nil {
+		return "", s.writeError(conn, err)
+	}
+	var res RegisterResult
+	_ = json.Unmarshal(result, &res)
+	return res.SessionID, WriteFrame(conn, Response{Result: result})
 }
 
 // connClosed decrements the active count and fires OnIdle when it reaches zero.

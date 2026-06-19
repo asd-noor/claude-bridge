@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.1] - 2026-06-19
+
+### Fixed
+
+- Reap a session as soon as its shim's connection drops, instead of waiting for
+  `SessionTTL`. Dirty shim exits (e.g. a plugin reload killing the process with no
+  clean unregister) no longer leave stale "zombie" peers in `list_peers`; the peer
+  list now reflects only live shims.
+
 ## [v1.1.0] - 2026-06-19
 
 ### Added
@@ -76,6 +85,7 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v1.1.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.1
 [v1.1.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.0
 [v1.0.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.0
