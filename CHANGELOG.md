@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.1] - 2026-06-19
+
+### Added
+
+- Plugin marketplace manifest (`.claude-plugin/marketplace.json`) so the bundled
+  plugin — the MCP shim plus the `bridge-awareness` skill — installs via
+  `/plugin marketplace add <repo>` then `/plugin install claude-bridge@claude-bridge`.
+- `go install` support: the `version` subcommand falls back to the module build
+  info (`runtime/debug`), so `go install github.com/asd-noor/claude-bridge/cmd/claude-bridge@vX.Y.Z`
+  reports the module version instead of `dev`.
+
+### Documentation
+
+- README: document the plugin-marketplace and `go install` installation paths.
+
 ## [v1.0.0] - 2026-06-19
 
 First stable release.
@@ -33,4 +48,5 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v1.0.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.0
