@@ -212,29 +212,36 @@ func (d *daemon) wireIdleShutdown() {
 		if d.idleTimer != nil {
 			d.idleTimer.Stop()
 		}
-		d.idleTimer = time.AfterFunc(timeout, d.gracefulShutdown)
+		d.idleTimer = time.AfterFunc(timeout, d.idleShutdown)
 		d.mu.Unlock()
 	})
 }
 
-// installSignalHandlers triggers a graceful shutdown on SIGTERM or SIGINT.
+// installSignalHandlers forces shutdown on SIGTERM or SIGINT. `claude-bridge
+// stop` relies on this, so it must tear down regardless of active connections.
 func (d *daemon) installSignalHandlers() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-sigs
 		d.logger.Info("signal received", "signal", sig.String())
-		d.gracefulShutdown()
+		d.shutdownNow()
 	}()
 }
 
-// gracefulShutdown stops accepting connections, removes runtime files, and ends
-// the accept loop. It aborts if a connection arrived during the idle timer.
-func (d *daemon) gracefulShutdown() {
+// idleShutdown fires from the idle timer; it aborts if a connection arrived
+// while the timer was pending. Explicit stops do not go through this guard.
+func (d *daemon) idleShutdown() {
 	if d.server.ActiveConns() > 0 {
-		d.logger.Debug("shutdown aborted, connections active")
+		d.logger.Debug("idle shutdown aborted, connections active")
 		return
 	}
+	d.shutdownNow()
+}
+
+// shutdownNow stops accepting connections, removes runtime files, and ends the
+// accept loop. It is idempotent.
+func (d *daemon) shutdownNow() {
 	d.shutdown.Do(func() {
 		d.logger.Info("shutting down")
 		// Remove the runtime files before closing the listener: closing it

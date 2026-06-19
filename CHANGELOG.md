@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.2] - 2026-06-19
+
+### Fixed
+
+- `claude-bridge stop` (and SIGTERM/SIGINT) now shut the daemon down even when
+  shims are connected. The graceful-shutdown active-connection guard was meant
+  only for the idle timer but also blocked the signal path, so an explicit stop
+  was a no-op whenever any session was attached. Signals now force shutdown; only
+  the idle timer keeps the guard.
+
 ## [v1.1.1] - 2026-06-19
 
 ### Fixed
@@ -85,6 +95,7 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v1.1.2]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.2
 [v1.1.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.1
 [v1.1.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.0
 [v1.0.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.1
