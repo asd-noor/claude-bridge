@@ -1,0 +1,15 @@
+{
+  "description": "Inject pending claude-bridge peer messages into each turn so a session sees cross-project messages without manually polling.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-bridge hook"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 {
     "name": "claude-bridge",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Local message broker bridging Claude Code sessions across projects on the same machine; provides bridge coordination tools (list_peers, broadcast, send_message, poll_messages) via an MCP shim.",
     "author": {
         "name": "Asaduzzaman Noor",

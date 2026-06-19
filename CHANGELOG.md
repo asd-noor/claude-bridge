@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0] - 2026-06-19
+
+### Added
+
+- **Automatic message delivery via a `UserPromptSubmit` hook.** The plugin now
+  ships a hook running `claude-bridge hook`, which injects pending peer messages
+  into the receiving session's context on each turn — no manual `poll_messages`.
+  This works around Claude Code not surfacing MCP `notifications/message` to the
+  model.
+- `claude-bridge hook` subcommand: resolves the session for the current
+  directory and emits queued messages as hook `additionalContext`.
+- The shim now records a `runtimeDir/sessions/<hash(cwd)>` → `session_id` map so
+  the hook can find the right inbox; removed on shim exit.
+
+### Notes
+
+- A fully idle session still can't be *woken* by an incoming message — Claude Code
+  only acts on a user turn; the hook surfaces messages the moment the user next
+  interacts. Unattended delivery needs a background (`claude -p`) receiver.
+
 ## [v1.0.1] - 2026-06-19
 
 ### Added
@@ -48,5 +68,6 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v1.1.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.0
 [v1.0.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.0.0

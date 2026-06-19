@@ -97,8 +97,15 @@ manifest `.claude-plugin/marketplace.json`. Installing the plugin wires the MCP 
 /plugin install claude-bridge@claude-bridge
 ```
 
-The plugin's bundled `.mcp.json` and `skills/` load automatically once enabled. The
-`claude-bridge` binary still needs to be on your `PATH` (step above).
+The plugin's bundled `.mcp.json`, `skills/`, and `hooks/` load automatically once
+enabled. The `claude-bridge` binary still needs to be on your `PATH` (step above).
+
+The bundled `UserPromptSubmit` hook is what makes incoming messages **show up on
+their own**: on each turn it injects any pending peer messages into the session's
+context, so you don't have to ask Claude to poll. (Claude Code does not surface MCP
+notifications to the model, so the MCP-server-only setup requires manual polling;
+the plugin's hook is the automatic path.) A fully idle session still isn't woken —
+messages appear the moment you next interact.
 
 ## CLI subcommands
 

@@ -52,6 +52,7 @@ cmd/claude-bridge/      CLI + process lifecycle
   spawn.go              daemon auto-spawn (flock + fork/exec + poll-connect)
   mcp.go                stdio shim: connect, register, subscribe→stdout, MCP loop
   status.go             status / stop / install (launchd)
+  hook.go               UserPromptSubmit hook: inject pending peer messages
 
 internal/broker/        the source of truth (transport-agnostic)
   broker.go             actor: run loop, command channel, session/inbox state
@@ -137,17 +138,38 @@ UUIDv7 `session_id`. Every inbound RPC carrying a `session_id` calls
 a clean shim exit the shim calls `unregister_session`; a dirty exit leaves the
 session to be reaped after `SessionTTL` by the run loop's cleanup tick.
 
-**Delivery.** Two paths, both fed by the broker:
-- **Push (primary):** the shim opens a second UDS connection and calls
-  `subscribe`. The daemon streams `Event`s; the shim forwards each as an MCP
-  `notifications/message` frame. Level is `warning` when `in_reply_to` or
-  `expects_reply` is set, `info` otherwise.
-- **Poll (fallback):** `poll_messages` drains and clears the inbox, for catch-up
-  after an interrupted subscription (e.g. a daemon restart).
+**Delivery.** Every message lands in the recipient's inbox (capacity
+`MaxInboxSize`, oldest evicted). Three ways it reaches the receiving Claude:
 
-Every message also lands in the recipient's inbox (capacity `MaxInboxSize`,
-oldest evicted), so a dropped push is always recoverable by poll. Broadcasts are
-rate-limited per sender with a token bucket (`BroadcastBurst` / `BroadcastRefill`).
+- **Hook auto-inject (primary path to the model).** The plugin registers a
+  `UserPromptSubmit` hook that runs `claude-bridge hook`. On each turn the hook
+  resolves the session owning the cwd (via the session-map file, below), drains
+  that inbox from the daemon, and returns the pending messages as
+  `additionalContext` — so they appear in the model's context automatically,
+  without the model calling a tool. This is the only path that reliably surfaces
+  a message to the LLM.
+- **Subscribe / push.** The shim opens a second UDS connection, calls `subscribe`,
+  and forwards each event as an MCP `notifications/message` frame (level `warning`
+  when `in_reply_to` / `expects_reply` is set, else `info`). Note: Claude Code
+  treats these as logging and does **not** surface them to the model, so this path
+  is effectively a no-op for the LLM today; the broker's push machinery remains as
+  transport that a notification-aware host could use.
+- **Poll.** `poll_messages` lets the model drain its inbox explicitly — the manual
+  fallback, and what the hook calls under the hood.
+
+Because all three read the same inbox, a message is delivered once: whoever drains
+first (usually the hook) gets it. Broadcasts are rate-limited per sender with a
+token bucket (`BroadcastBurst` / `BroadcastRefill`).
+
+**Limit.** A fully idle interactive session cannot be *woken* — Claude Code only
+acts on a user turn (or a hook firing on one). The hook makes messages appear the
+moment the user next interacts; true unattended delivery needs a background
+(`claude -p`) receiver that polls.
+
+**Session map.** So the hook (a separate process) can find the right inbox, the
+shim writes `runtimeDir/sessions/<sha256(cwd)>` = its `session_id` on register and
+removes it on exit. The hook reads it by cwd. Two sessions in the same cwd collide
+on this key (last writer wins) — rare, and only degrades the auto-inject hook.
 
 ### Tools exposed to Claude
 
@@ -167,6 +189,7 @@ runtimeDir = $TMPDIR/claude-bridge-$UID   (mode 0700 — the access boundary)
   daemon.lock  (flock for the spawn/bind race)
   daemon.pid
   daemon.log   (when detached)
+  sessions/    (per-cwd session_id maps for the prompt hook)
 ```
 
 The `0700` directory mode is the security boundary: only the owning user can
