@@ -147,12 +147,14 @@ func (s *Server) Serve(ln net.Listener) error {
 // handleConn services one connection's frames until EOF or error, maintaining
 // the active-connection count around its lifetime.
 //
-// A session's lifetime is its shim's connection: when the connection that a
-// session uses drops, the session is unregistered immediately rather than left
-// for SessionTTL to reap. This keeps the peer list reflecting live shims even
-// when a shim exits dirty (e.g. a plugin reload kills it with no clean
-// unregister). Connections that carry no session_id (e.g. `status`) bind nothing
-// and reap nothing.
+// A session's lifetime is bound to the connection that REGISTERED it (the
+// shim's long-lived control connection): when that connection drops, the session
+// is unregistered immediately rather than left for SessionTTL. This keeps the
+// peer list reflecting live shims even on a dirty exit (e.g. a plugin reload
+// kills the shim with no clean unregister). Only the registering connection
+// binds — ephemeral connections that merely reference a session_id (the prompt
+// hook's poll, `status`, the subscribe stream) reap nothing, so they cannot
+// unregister a session that is still alive.
 func (s *Server) handleConn(conn net.Conn) {
 	s.active.Add(1)
 
@@ -178,7 +180,6 @@ func (s *Server) handleConn(conn net.Conn) {
 
 		if req.SessionID != "" {
 			s.broker.Touch(req.SessionID)
-			boundSession = req.SessionID
 		}
 
 		// Subscribe owns the connection for its lifetime; everything else is a

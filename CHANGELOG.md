@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.3] - 2026-06-19
+
+### Fixed
+
+- Reap a session only when the connection that **registered** it drops, not when
+  any connection referencing the `session_id` closes. The v1.1.1 reap bound to
+  every session-bearing frame, so the prompt hook's short-lived poll connection
+  unregistered its own still-live session on close — peers vanished mid-use
+  ("unknown session" on send). Ephemeral connections (hook poll, `status`,
+  subscribe stream) now reap nothing.
+
 ## [v1.1.2] - 2026-06-19
 
 ### Fixed
@@ -95,6 +106,7 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v1.1.3]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.3
 [v1.1.2]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.2
 [v1.1.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.1
 [v1.1.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.0

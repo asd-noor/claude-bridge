@@ -444,6 +444,58 @@ func TestIdleShutdownCanceledByNewConn(t *testing.T) {
 	}
 }
 
+// TestReapOnlyOnRegisteringConnection verifies that a session is reaped only
+// when the connection that registered it drops — not when an ephemeral
+// connection that merely references the session_id (e.g. the prompt hook's
+// poll) closes. Regression test for the bug where any session-bearing frame
+// bound the reap, so a hook poll unregistered its own live session.
+func TestReapOnlyOnRegisteringConnection(t *testing.T) {
+	h := newHarness(t, broker.Config{})
+
+	ctrl := h.dial()
+	idA := register(t, ctrl, "/work/a")
+
+	probe := h.dial()
+	present := func() bool {
+		raw, err := probe.Call(MethodListPeers, nil)
+		if err != nil {
+			t.Fatalf("list_peers: %v", err)
+		}
+		var res ListPeersResult
+		if err := json.Unmarshal(raw, &res); err != nil {
+			t.Fatalf("decode list_peers: %v", err)
+		}
+		for _, p := range res.Peers {
+			if p.ID == idA {
+				return true
+			}
+		}
+		return false
+	}
+
+	// An ephemeral connection references A (as the hook's poll does) then closes.
+	poller, err := Dial(h.path)
+	if err != nil {
+		t.Fatalf("dial poller: %v", err)
+	}
+	if _, err := poller.CallAs(idA, MethodPoll, struct{}{}); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	_ = poller.Close()
+
+	// Give any erroneous reap a chance to land, then assert A survived.
+	time.Sleep(100 * time.Millisecond)
+	if !present() {
+		t.Fatal("session was reaped by an ephemeral poll connection")
+	}
+
+	// Dropping the registering connection does reap A.
+	_ = ctrl.Close()
+	eventually(t, "registering-connection drop reaps the session", func() bool {
+		return !present()
+	})
+}
+
 // TestStaleSocketHandling documents that stale-socket recovery is a cmd/serve
 // concern (flock dance + listen-after-remove) and is not drivable through the
 // daemonrpc layer alone, which only consumes an already-bound net.Listener.
