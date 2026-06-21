@@ -57,12 +57,15 @@ type ListPeersResult struct {
 	Peers []*broker.Session `json:"peers"`
 }
 
-// SendParams addresses a directed message to a single peer.
+// SendParams addresses a directed message to a single peer. Kind and RequestID
+// carry the permission-relay control flow; both are empty for ordinary messages.
 type SendParams struct {
 	To           string `json:"to"`
 	Content      string `json:"content"`
 	InReplyTo    string `json:"in_reply_to,omitempty"`
 	ExpectsReply bool   `json:"expects_reply,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
 }
 
 // SendResult returns the broker-assigned message identifier.
@@ -301,6 +304,8 @@ func (s *Server) doSend(from string, params json.RawMessage) (json.RawMessage, e
 		Content:      p.Content,
 		InReplyTo:    p.InReplyTo,
 		ExpectsReply: p.ExpectsReply,
+		Kind:         p.Kind,
+		RequestID:    p.RequestID,
 	})
 	if err != nil {
 		return nil, err

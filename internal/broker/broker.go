@@ -40,6 +40,9 @@ const (
 	defaultBroadcastBurst  = 3
 	defaultBroadcastRefill = 10 * time.Second
 
+	defaultLivelockMaxChain  = 20
+	defaultLivelockResetIdle = 60 * time.Second
+
 	// blockingPushTimeout bounds a blocking push to a busy recipient.
 	blockingPushTimeout = 100 * time.Millisecond
 	// subChanBuffer sizes each subscription's outbound channel.
@@ -57,6 +60,10 @@ type Config struct {
 	CleanupTick     time.Duration // cleanup loop interval
 	BroadcastBurst  int           // broadcast token bucket capacity
 	BroadcastRefill time.Duration // broadcast token bucket refill interval
+
+	LivelockEnabled   bool          // trip the no-progress reply-chain breaker
+	LivelockMaxChain  int           // consecutive content-free exchanges before tripping
+	LivelockResetIdle time.Duration // idle gap that resets a chain
 }
 
 // withDefaults returns a copy of cfg with zero fields replaced by defaults.
@@ -78,6 +85,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.BroadcastRefill <= 0 {
 		c.BroadcastRefill = defaultBroadcastRefill
+	}
+	if c.LivelockMaxChain <= 0 {
+		c.LivelockMaxChain = defaultLivelockMaxChain
+	}
+	if c.LivelockResetIdle <= 0 {
+		c.LivelockResetIdle = defaultLivelockResetIdle
 	}
 	return c
 }
@@ -120,6 +133,7 @@ type state struct {
 	now      func() time.Time
 	sessions map[string]*sessEntry // session_id → metadata + inbox + bucket
 	pushers  map[string]*pusher    // session_id → active subscription pusher
+	livelock *livelockTracker      // no-progress reply-chain breaker
 }
 
 // sessEntry is a session's metadata plus its pending inbox and broadcast limiter.
@@ -135,11 +149,13 @@ func New(cfg Config) *Broker {
 		cmds: make(chan func(*state), cmdBuffer),
 		done: make(chan struct{}),
 	}
+	resolved := cfg.withDefaults()
 	st := &state{
-		cfg:      cfg.withDefaults(),
+		cfg:      resolved,
 		now:      time.Now,
 		sessions: make(map[string]*sessEntry),
 		pushers:  make(map[string]*pusher),
+		livelock: newLivelockTracker(resolved),
 	}
 	go b.run(st)
 	return b
@@ -320,8 +336,17 @@ func (b *Broker) Send(msg Message) (string, error) {
 		if !ok {
 			return result{"", ErrUnknownSession}
 		}
+		// Permission-relay control messages are push-only: they never persist in
+		// the inbox and are exempt from the livelock breaker. Ordinary messages
+		// are inboxed, and their wake is suppressed once the breaker trips.
+		if m.Kind != KindMessage {
+			st.deliver(m.To, Event{Type: EventMessage, Payload: m})
+			return result{m.ID, nil}
+		}
 		st.enqueue(e, m)
-		st.deliver(m.To, Event{Type: EventMessage, Payload: m})
+		if !st.livelock.trip(m, st.now()) {
+			st.deliver(m.To, Event{Type: EventMessage, Payload: m})
+		}
 		return result{m.ID, nil}
 	})
 	if !ok {
@@ -481,6 +506,7 @@ func (st *state) reap(now time.Time) {
 		st.notifyPeers(id, Event{Type: EventPeerLeft, Payload: id})
 	}
 	st.expireMessages(now)
+	st.livelock.prune(now)
 }
 
 // expireMessages drops inbox messages whose TTL has elapsed. Caller is the loop.

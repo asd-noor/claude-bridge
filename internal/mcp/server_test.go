@@ -33,11 +33,6 @@ func newTestServer(c daemonClient) *Server {
 	return &Server{client: c, sessionID: "sess-1", tools: toolRegistry()}
 }
 
-// newChannelServer builds a Server with channel mode enabled.
-func newChannelServer(c daemonClient) *Server {
-	return &Server{client: c, sessionID: "sess-1", channelMode: true, tools: toolRegistry()}
-}
-
 // runOne dispatches a single non-notification request and returns its response.
 func runOne(t *testing.T, s *Server, req MCPRequest) MCPResponse {
 	t.Helper()
@@ -62,6 +57,19 @@ func TestInitialize(t *testing.T) {
 	if _, ok := caps["tools"]; !ok {
 		t.Fatalf("tools capability not advertised: %v", caps)
 	}
+	exp, ok := caps["experimental"].(map[string]any)
+	if !ok {
+		t.Fatalf("experimental capability missing: %v", caps)
+	}
+	if _, ok := exp[experimentalChannelCapability]; !ok {
+		t.Fatalf("claude/channel capability missing: %v", exp)
+	}
+	if _, ok := exp[experimentalPermissionCapability]; !ok {
+		t.Fatalf("claude/channel/permission capability missing: %v", exp)
+	}
+	if res["instructions"] != channelInstructions {
+		t.Fatalf("instructions = %v, want channel instructions", res["instructions"])
+	}
 }
 
 func TestToolsList(t *testing.T) {
@@ -69,8 +77,8 @@ func TestToolsList(t *testing.T) {
 	resp := runOne(t, s, MCPRequest{ID: 2, Method: methodToolsList})
 	res := resp.Result.(map[string]any)
 	tools := res["tools"].([]Tool)
-	if len(tools) != 5 {
-		t.Fatalf("expected 5 tools, got %d", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("expected 6 tools, got %d", len(tools))
 	}
 }
 
@@ -160,74 +168,8 @@ func TestServeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestForwardEventsLevels(t *testing.T) {
+func TestForwardEvents(t *testing.T) {
 	s := newTestServer(&fakeClient{})
-	events := make(chan broker.Event, 2)
-	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
-		ID: "1", From: "a", Content: "fyi",
-	}}
-	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
-		ID: "2", From: "a", Content: "answer me", ExpectsReply: true,
-	}}
-	close(events)
-
-	var out bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	s.ForwardEvents(ctx, events, &out)
-
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 notification frames, got %d: %q", len(lines), out.String())
-	}
-
-	levels := make([]string, 0, 2)
-	for _, ln := range lines {
-		var frame struct {
-			Method string `json:"method"`
-			Params struct {
-				Level string `json:"level"`
-			} `json:"params"`
-		}
-		if err := json.Unmarshal([]byte(ln), &frame); err != nil {
-			t.Fatalf("decode frame: %v", err)
-		}
-		if frame.Method != notificationMethod {
-			t.Fatalf("frame method = %q", frame.Method)
-		}
-		levels = append(levels, frame.Params.Level)
-	}
-	if levels[0] != levelInfo || levels[1] != levelWarning {
-		t.Fatalf("levels = %v, want [info warning]", levels)
-	}
-}
-
-func TestInitializeChannelMode(t *testing.T) {
-	s := newChannelServer(&fakeClient{})
-	resp := runOne(t, s, MCPRequest{ID: 1, Method: methodInitialize})
-	if resp.Error != nil {
-		t.Fatalf("initialize error: %+v", resp.Error)
-	}
-	res := resp.Result.(map[string]any)
-
-	caps := res["capabilities"].(map[string]any)
-	if _, ok := caps["tools"]; !ok {
-		t.Fatalf("tools capability dropped in channel mode: %v", caps)
-	}
-	exp, ok := caps["experimental"].(map[string]any)
-	if !ok {
-		t.Fatalf("experimental capability missing: %v", caps)
-	}
-	if _, ok := exp[experimentalChannelCapability]; !ok {
-		t.Fatalf("claude/channel capability missing: %v", exp)
-	}
-	if res["instructions"] != channelInstructions {
-		t.Fatalf("instructions = %v, want channel instructions", res["instructions"])
-	}
-}
-
-func TestForwardEventsChannelMode(t *testing.T) {
-	s := newChannelServer(&fakeClient{})
 	events := make(chan broker.Event, 3)
 	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
 		ID: "m1", From: "peer-a", Content: "hello",
@@ -235,7 +177,7 @@ func TestForwardEventsChannelMode(t *testing.T) {
 	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
 		ID: "m2", From: "peer-b", Content: "answer me", InReplyTo: "m1", ExpectsReply: true,
 	}}
-	// Non-message events must be dropped in channel mode.
+	// Non-message events (peer_joined/left) are dropped.
 	events <- broker.Event{Type: broker.EventPeerJoined, Payload: map[string]any{"session": "peer-c"}}
 	close(events)
 
@@ -249,7 +191,7 @@ func TestForwardEventsChannelMode(t *testing.T) {
 		t.Fatalf("expected 2 channel frames (peer_joined dropped), got %d: %q", len(lines), out.String())
 	}
 
-	type channelFrame struct {
+	type wireFrame struct {
 		Method string `json:"method"`
 		Params struct {
 			Content string            `json:"content"`
@@ -257,7 +199,7 @@ func TestForwardEventsChannelMode(t *testing.T) {
 		} `json:"params"`
 	}
 
-	var f0 channelFrame
+	var f0 wireFrame
 	if err := json.Unmarshal([]byte(lines[0]), &f0); err != nil {
 		t.Fatalf("decode frame 0: %v", err)
 	}
@@ -277,7 +219,7 @@ func TestForwardEventsChannelMode(t *testing.T) {
 		t.Fatalf("frame 0 expects_reply should be omitted: %v", f0.Params.Meta)
 	}
 
-	var f1 channelFrame
+	var f1 wireFrame
 	if err := json.Unmarshal([]byte(lines[1]), &f1); err != nil {
 		t.Fatalf("decode frame 1: %v", err)
 	}
@@ -289,5 +231,88 @@ func TestForwardEventsChannelMode(t *testing.T) {
 	}
 	if f1.Params.Meta[metaExpectsReply] != metaTrue {
 		t.Fatalf("frame 1 expects_reply = %q, want %q", f1.Params.Meta[metaExpectsReply], metaTrue)
+	}
+}
+
+func TestForwardPermissionRequestFrame(t *testing.T) {
+	s := newTestServer(&fakeClient{})
+	events := make(chan broker.Event, 1)
+	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
+		ID: "m1", From: "peer-a", Content: "approve Bash?",
+		Kind: broker.KindPermissionRequest, RequestID: "abcde",
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.ForwardEvents(ctx, events, &out)
+
+	var f struct {
+		Method string `json:"method"`
+		Params struct {
+			Meta map[string]string `json:"meta"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &f); err != nil {
+		t.Fatalf("decode frame: %v (%q)", err, out.String())
+	}
+	if f.Method != channelMethod {
+		t.Fatalf("method = %q, want a channel frame", f.Method)
+	}
+	if f.Params.Meta[metaKind] != broker.KindPermissionRequest || f.Params.Meta[metaRequestID] != "abcde" {
+		t.Fatalf("permission_request meta = %v", f.Params.Meta)
+	}
+}
+
+func TestForwardPermissionVerdictFrame(t *testing.T) {
+	s := newTestServer(&fakeClient{})
+	events := make(chan broker.Event, 1)
+	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
+		ID: "v1", From: "peer-b", Content: behaviorAllow,
+		Kind: broker.KindPermissionVerdict, RequestID: "abcde",
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.ForwardEvents(ctx, events, &out)
+
+	var f struct {
+		Method string `json:"method"`
+		Params struct {
+			RequestID string `json:"request_id"`
+			Behavior  string `json:"behavior"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &f); err != nil {
+		t.Fatalf("decode frame: %v (%q)", err, out.String())
+	}
+	if f.Method != permissionVerdictMethod {
+		t.Fatalf("method = %q, want %q", f.Method, permissionVerdictMethod)
+	}
+	if f.Params.RequestID != "abcde" || f.Params.Behavior != behaviorAllow {
+		t.Fatalf("verdict frame params = %+v", f.Params)
+	}
+}
+
+func TestHandlePermissionRequestFansOutToPeers(t *testing.T) {
+	fc := &fakeClient{result: json.RawMessage(`{"peers":[{"id":"peer-9"}]}`)}
+	s := newTestServer(fc)
+
+	params := json.RawMessage(`{"request_id":"abcde","tool_name":"Bash","description":"run ls","input_preview":"ls -la"}`)
+	_, isNotif := s.dispatch(MCPRequest{ID: nil, Method: methodPermissionRequest, Params: params})
+	if !isNotif {
+		t.Fatal("permission_request must be handled as a notification")
+	}
+
+	// The last daemon call is the per-peer send carrying the relayed request.
+	if fc.lastMethod != daemonrpc.MethodSend {
+		t.Fatalf("last method = %q, want send", fc.lastMethod)
+	}
+	sp := fc.lastParams.(daemonrpc.SendParams)
+	if sp.To != "peer-9" || sp.Kind != broker.KindPermissionRequest || sp.RequestID != "abcde" {
+		t.Fatalf("relayed send params = %+v", sp)
 	}
 }

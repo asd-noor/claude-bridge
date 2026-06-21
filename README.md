@@ -82,42 +82,59 @@ which is the point of a cross-session bridge):
 claude mcp add --scope user claude-bridge -- claude-bridge mcp
 ```
 
-That is the whole integration: no port, no socket path, no hooks. Claude Code spawns
-`claude-bridge mcp` per session; the shim registers the session with the daemon and
-forwards bridge tool calls and push notifications.
+That is the whole integration: no port, no socket path, no hooks, no plugin. Claude
+Code spawns `claude-bridge mcp` per session; an opted-in shim registers the session
+with the daemon and forwards bridge tool calls and channel notifications.
 
-### As a plugin (tools + the bridge-awareness skill)
+### Opt-in: bridge sessions only
 
-The repo ships a Claude Code plugin under `plugin/`, listed in the marketplace
-manifest `.claude-plugin/marketplace.json`. Installing the plugin wires the MCP shim
-**and** the `bridge-awareness` skill that teaches Claude when to reach for the bridge:
+Registering the server (above, especially `--scope user`) means Claude Code spawns
+the shim for **every** session. A session only actually joins the bridge — registers,
+connects to the daemon, exposes the tools, becomes a channel — when it opts in with
+`CLAUDE_BRIDGE_ENABLE=1`. Without it the shim is **inert**: no daemon, no peer entry,
+no tools. So ordinary work never pollutes the peer list, and coordination is a
+deliberate choice.
+
+Channels also require Claude's development flag (custom channels are a research
+preview). Wrap both in a shell function so you opt in with one word:
 
 ```sh
-/plugin marketplace add /path/to/claude-bridge
-/plugin install claude-bridge@claude-bridge
+cb() { CLAUDE_BRIDGE_ENABLE=1 claude --dangerously-load-development-channels server:claude-bridge "$@"; }
 ```
 
-The plugin ships the `bridge-awareness` skill (which teaches Claude when to reach
-for the bridge) and loads once enabled. The MCP server itself is registered
-separately (the `claude mcp add` step above), and the `claude-bridge` binary needs
-to be on your `PATH`.
+Launch a bridge session with `cb`; launch ordinary sessions with plain `claude`. The
+dev-channels warning `cb` prints is unavoidable for a self-built channel and harmless.
 
 ### Automatic delivery (channels)
 
-Incoming messages **show up on their own** — including in a fully idle session —
-via Claude Code [channels](https://code.claude.com/docs/en/channels). The shim
-pushes each peer message as a `notifications/claude/channel` event, which starts a
-turn even when you're not typing. Because custom channels are a research preview,
-the session must be launched with the development flag:
+In a `cb` session, incoming messages **show up on their own** — including in a fully
+idle session — via Claude Code [channels](https://code.claude.com/docs/en/channels).
+The shim pushes each peer message as a `notifications/claude/channel` event, which
+starts a turn even when you're not typing. If a session wasn't launched as a channel,
+messages still queue in the inbox — drain them with the `poll_messages` tool.
 
-```sh
-claude --dangerously-load-development-channels server:claude-bridge
+The bridge ships with six tools: `list_peers`, `send_message`, `broadcast`,
+`poll_messages`, `get_peer_info`, and `respond_permission`.
+
+#### Permission relay
+
+When Claude Code opens a tool-approval dialog, the shim relays the prompt to your
+connected peers. A peer's Claude can answer it by calling the `respond_permission`
+tool (`to`, `request_id`, `behavior: "allow" | "deny"`); the verdict flows back to
+the requesting session. The local terminal dialog also stays open — whichever
+answer arrives first wins.
+
+#### Avoiding per-call permission prompts
+
+To skip the per-call approval prompt for the bridge's own tools, add an allow rule
+to `~/.claude/settings.json`:
+
+```json
+{ "permissions": { "allow": ["mcp__claude-bridge"] } }
 ```
 
-That warning is unavoidable for a self-built channel and is harmless. If a session
-isn't launched as a channel, messages still queue in the inbox — drain them with
-the `poll_messages` tool. Channel delivery is controlled by `broker.channel_mode`
-(default `true`).
+The rule covers all bridge tools and only takes effect while the server is
+connected.
 
 ## CLI subcommands
 

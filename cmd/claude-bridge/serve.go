@@ -139,12 +139,15 @@ func (d *daemon) serve() error {
 // brokerConfig maps the config broker section onto a broker.Config.
 func brokerConfig(cfg config.Config) broker.Config {
 	return broker.Config{
-		MessageTTL:      cfg.Broker.MessageTTL.Std(),
-		SessionTTL:      cfg.Broker.SessionTTL.Std(),
-		MaxInboxSize:    cfg.Broker.MaxInboxSize,
-		CleanupTick:     cfg.Broker.CleanupTick.Std(),
-		BroadcastBurst:  cfg.Broker.BroadcastBurst,
-		BroadcastRefill: cfg.Broker.BroadcastRefill.Std(),
+		MessageTTL:        cfg.Broker.MessageTTL.Std(),
+		SessionTTL:        cfg.Broker.SessionTTL.Std(),
+		MaxInboxSize:      cfg.Broker.MaxInboxSize,
+		CleanupTick:       cfg.Broker.CleanupTick.Std(),
+		BroadcastBurst:    cfg.Broker.BroadcastBurst,
+		BroadcastRefill:   cfg.Broker.BroadcastRefill.Std(),
+		LivelockEnabled:   cfg.Broker.Livelock.Enabled,
+		LivelockMaxChain:  cfg.Broker.Livelock.MaxChain,
+		LivelockResetIdle: cfg.Broker.Livelock.ResetIdle.Std(),
 	}
 }
 

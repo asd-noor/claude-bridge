@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
+	"github.com/asd-noor/claude-bridge/internal/broker"
 	"github.com/asd-noor/claude-bridge/internal/daemonrpc"
 )
 
@@ -22,11 +24,12 @@ type toolHandler func(c daemonClient, sessionID string, args json.RawMessage) (a
 // toolRegistry maps each MCP tool name to its handler.
 func toolRegistry() map[string]toolHandler {
 	return map[string]toolHandler{
-		ToolListPeers:    handleListPeers,
-		ToolSendMessage:  handleSendMessage,
-		ToolBroadcast:    handleBroadcast,
-		ToolPollMessages: handlePollMessages,
-		ToolGetPeerInfo:  handleGetPeerInfo,
+		ToolListPeers:         handleListPeers,
+		ToolSendMessage:       handleSendMessage,
+		ToolBroadcast:         handleBroadcast,
+		ToolPollMessages:      handlePollMessages,
+		ToolGetPeerInfo:       handleGetPeerInfo,
+		ToolRespondPermission: handleRespondPermission,
 	}
 }
 
@@ -171,6 +174,38 @@ func handleGetPeerInfo(c daemonClient, sessionID string, args json.RawMessage) (
 		ProjectPath: res.ProjectPath,
 		LastSeen:    res.LastSeen,
 	}, nil
+}
+
+// respondPermissionArgs are the arguments accepted by respond_permission.
+type respondPermissionArgs struct {
+	To        string `json:"to"`
+	RequestID string `json:"request_id"`
+	Behavior  string `json:"behavior"`
+}
+
+// handleRespondPermission relays an allow/deny verdict back to the peer that
+// requested approval. It sends a permission-verdict message the origin shim turns
+// into a notifications/claude/channel/permission for its host.
+func handleRespondPermission(c daemonClient, sessionID string, args json.RawMessage) (any, error) {
+	a, err := decodeArgs[respondPermissionArgs](args)
+	if err != nil {
+		return nil, errInvalidParams(err)
+	}
+	if a.Behavior != behaviorAllow && a.Behavior != behaviorDeny {
+		return nil, errInvalidParams(fmt.Errorf("behavior must be %q or %q", behaviorAllow, behaviorDeny))
+	}
+	if a.To == "" || a.RequestID == "" {
+		return nil, errInvalidParams(fmt.Errorf("to and request_id are required"))
+	}
+	if _, err := c.CallAs(sessionID, daemonrpc.MethodSend, daemonrpc.SendParams{
+		To:        a.To,
+		Content:   a.Behavior,
+		Kind:      broker.KindPermissionVerdict,
+		RequestID: a.RequestID,
+	}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "sent"}, nil
 }
 
 // decodeArgs unmarshals tool arguments into T, tolerating an empty body.

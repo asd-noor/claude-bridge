@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.0.0] - 2026-06-21
+
+Channels are still a Claude Code **research preview**; the launch contract may
+change.
+
+### Added
+
+- **Opt-in bridge sessions.** A session joins the bridge only when launched with
+  `CLAUDE_BRIDGE_ENABLE=1` (set by the `cb` wrapper). Otherwise the shim serves an
+  inert MCP server — no daemon, no registration, no peer entry, no tools — so
+  ordinary sessions no longer pollute the peer list or auto-spawn the daemon.
+- **Livelock breaker (in the broker).** A no-progress reply-chain circuit breaker
+  trips when two sessions exchange more than `max_chain` consecutive content-free
+  messages (a new body that normalized-equals one of the last few seen for that
+  pair, catching alternating echoes). On trip the broker **stops waking** the
+  recipient for that pair, but the message still lands in the inbox — no data loss,
+  `poll_messages` still works. An idle gap longer than `reset_idle` resets the
+  chain. Configured under `broker.livelock.{enabled, max_chain, reset_idle}`
+  (defaults `true` / `20` / `60s`); `enabled: false` or `max_chain: 0` disables it.
+  Progress is inferred from changing content only (the broker can't see tool use).
+- **Permission relay.** When Claude Code opens a tool-approval dialog, the shim
+  relays the prompt to peers (capability `claude/channel/permission`). A peer's
+  Claude answers, and the verdict flows back to the requesting session, which emits
+  it to its host as a `notifications/claude/channel/permission` frame. The local
+  terminal dialog stays open; first answer wins. `broker.Message` and
+  `daemonrpc.SendParams` gained `kind` + `request_id` fields to carry the flow.
+- **`respond_permission` tool** (`to`, `request_id`, `behavior: "allow" | "deny"`)
+  for answering a relayed permission prompt — the MCP surface is now six tools.
+
+### Changed
+
+- **BREAKING — channels are the only push path.** The shim always behaves as a
+  channel; inbound messages always push as `notifications/claude/channel` frames.
+  There is no longer a flag to turn this off.
+
+### Removed
+
+- **BREAKING — the `broker.channel_mode` config key and the
+  `CLAUDE_BRIDGE_CHANNEL_MODE` env var.** There is no channel-mode toggle anymore.
+- **BREAKING — the legacy `notifications/message` frame** (and its info/warning
+  levels), which Claude Code treated as logging and never surfaced to the model.
+- **BREAKING — the Claude Code plugin and the `bridge-awareness` skill** (and the
+  `plugin/` + `.claude-plugin/marketplace.json` packaging). The bridge is now just
+  the bare MCP server registered in `~/.claude.json`; the skill's proactive
+  coordination guidance moved into the server `instructions`, which reach only
+  opted-in sessions. Uninstall the old plugin: `/plugin uninstall claude-bridge@claude-bridge`
+  then `/plugin marketplace remove claude-bridge`.
+
 ## [v1.2.0] - 2026-06-21
 
 ### Added
@@ -132,6 +180,8 @@ First stable release.
   `run`, and `install` (to `~/.local/bin`).
 - **Docs & license**: `ARCHITECTURE.md` and the GNU GPL v3 license.
 
+[v2.0.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v2.0.0
+[v1.2.0]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.2.0
 [v1.1.3]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.3
 [v1.1.2]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.2
 [v1.1.1]: https://github.com/asd-noor/claude-bridge/releases/tag/v1.1.1

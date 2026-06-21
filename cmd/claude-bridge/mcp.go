@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +18,19 @@ import (
 
 // unregisterTimeout bounds the best-effort unregister on shim exit.
 const unregisterTimeout = 200 * time.Millisecond
+
+// envBridgeEnable opts a session into the bridge. Claude Code spawns the shim for
+// every session that has claude-bridge in its MCP config, but a session only
+// joins the bridge (registers, connects, exposes tools, becomes a channel) when
+// this is truthy — set by the `cb` launch wrapper. Unset, the shim serves an inert
+// MCP server: no daemon, no registration, no peer, no tools.
+const envBridgeEnable = "CLAUDE_BRIDGE_ENABLE"
+
+// bridgeEnabled reports whether this session opted into the bridge.
+func bridgeEnabled() bool {
+	v, err := strconv.ParseBool(os.Getenv(envBridgeEnable))
+	return err == nil && v
+}
 
 // shim holds the two daemon connections and the session identity for one MCP
 // shim process: a control client for RPC and a second client dedicated to the
@@ -30,8 +44,14 @@ type shim struct {
 
 // runMCP runs the stdio MCP shim: it ensures a daemon, registers a session,
 // subscribes for push events, and serves the MCP loop on stdin/stdout until
-// EOF or a termination signal, then unregisters and exits.
+// EOF or a termination signal, then unregisters and exits. A session that did
+// not opt in (see envBridgeEnable) serves an inert MCP server instead, so
+// ordinary sessions neither spawn the daemon nor appear as phantom peers.
 func runMCP(cfg config.Config, logger *slog.Logger) int {
+	if !bridgeEnabled() {
+		return runInertMCP()
+	}
+
 	sh, err := startShim(cfg, logger)
 	if err != nil {
 		logger.Error("shim startup", "err", err)
@@ -39,7 +59,7 @@ func runMCP(cfg config.Config, logger *slog.Logger) int {
 	}
 	defer sh.close()
 
-	server := mcp.NewServer(sh.control, sh.sessionID, cfg.Broker.ChannelMode)
+	server := mcp.NewServer(sh.control, sh.sessionID)
 
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -64,6 +84,16 @@ func runMCP(cfg config.Config, logger *slog.Logger) int {
 	cancel()
 	wg.Wait()
 	sh.unregister()
+	return 0
+}
+
+// runInertMCP serves a tool-less MCP server for a session that did not opt into
+// the bridge. It touches no daemon and registers no session, so Claude Code sees
+// a connected-but-empty server rather than a failed one. Returns on EOF or signal.
+func runInertMCP() int {
+	ctx, cancel := signalContext()
+	defer cancel()
+	_ = mcp.NewInertServer().Serve(ctx, os.Stdin, os.Stdout)
 	return 0
 }
 

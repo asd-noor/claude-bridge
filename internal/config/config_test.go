@@ -69,7 +69,12 @@ func TestLoadYAMLOverlay(t *testing.T) {
 			CleanupTick:     Duration(30 * time.Second),
 			BroadcastBurst:  5,
 			BroadcastRefill: Duration(15 * time.Second),
-			ChannelMode:     true, // not set in sampleYAML → default carries through
+			// livelock not set in sampleYAML → defaults carry through
+			Livelock: Livelock{
+				Enabled:   true,
+				MaxChain:  defaultLivelockMaxChain,
+				ResetIdle: Duration(defaultLivelockResetIdle),
+			},
 		},
 		Log: Log{Level: "debug", Format: "json"},
 	}
@@ -133,33 +138,38 @@ func TestEnvOverridesWinOverFile(t *testing.T) {
 	}
 }
 
-func TestChannelModeEnvOverride(t *testing.T) {
+func TestLivelockOverlay(t *testing.T) {
 	clearEnv(t)
-	missing := filepath.Join(t.TempDir(), "absent.yaml")
 
-	// Default is on (channels are the delivery path).
-	got, err := Load(missing)
+	// A partial livelock block overrides only the keys present; enabled keeps its
+	// default (true) rather than resetting to the zero value.
+	path := writeConfig(t, `
+broker:
+  livelock:
+    max_chain: 5
+    reset_idle: "30s"
+`)
+	got, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !got.Broker.ChannelMode {
-		t.Fatalf("ChannelMode = false, want default true")
+	want := Livelock{Enabled: true, MaxChain: 5, ResetIdle: Duration(30 * time.Second)}
+	if got.Broker.Livelock != want {
+		t.Fatalf("Livelock = %+v, want %+v", got.Broker.Livelock, want)
 	}
 
-	// Env flips it off.
-	t.Setenv(envChannelMode, "false")
-	got, err = Load(missing)
+	// enabled: false disables the breaker.
+	path = writeConfig(t, `
+broker:
+  livelock:
+    enabled: false
+`)
+	got, err = Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Broker.ChannelMode {
-		t.Fatalf("ChannelMode = true, want false from env override")
-	}
-
-	// A bad value errors.
-	t.Setenv(envChannelMode, "not-a-bool")
-	if _, err := Load(missing); err == nil {
-		t.Fatalf("Load() = nil error, want error for invalid bool")
+	if got.Broker.Livelock.Enabled {
+		t.Fatalf("Livelock.Enabled = true, want false from override")
 	}
 }
 
@@ -262,7 +272,7 @@ func TestArtifactPaths(t *testing.T) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		envRuntimeDir, envIdleTimeout, envMessageTTL, envSessionTTL, envLogLevel, envChannelMode,
+		envRuntimeDir, envIdleTimeout, envMessageTTL, envSessionTTL, envLogLevel,
 	} {
 		t.Setenv(name, "")
 		os.Unsetenv(name)

@@ -3,11 +3,12 @@ package mcp
 // Tool names exposed to Claude over MCP. These are the public, session-id-free
 // surface; the shim injects its own session_id into the underlying daemon RPC.
 const (
-	ToolListPeers    = "list_peers"
-	ToolSendMessage  = "send_message"
-	ToolBroadcast    = "broadcast"
-	ToolPollMessages = "poll_messages"
-	ToolGetPeerInfo  = "get_peer_info"
+	ToolListPeers         = "list_peers"
+	ToolSendMessage       = "send_message"
+	ToolBroadcast         = "broadcast"
+	ToolPollMessages      = "poll_messages"
+	ToolGetPeerInfo       = "get_peer_info"
+	ToolRespondPermission = "respond_permission"
 )
 
 // Tool describes a single MCP tool: its name, a human-readable description, and
@@ -90,6 +91,18 @@ func Tools() []Tool {
 					"session_id": stringProp("The peer session_id to look up."),
 				},
 				[]string{"session_id"},
+			),
+		},
+		{
+			Name:        ToolRespondPermission,
+			Description: "Answer a peer's relayed tool-approval prompt. Only call this for an inbound <channel> message whose kind is \"permission_request\": pass to=the message's from, request_id=the message's request_id, and behavior=\"allow\" or \"deny\".",
+			InputSchema: objectSchema(
+				map[string]any{
+					"to":         stringProp("session_id of the peer that requested approval (the from of the permission_request)."),
+					"request_id": stringProp("The request_id carried on the permission_request message."),
+					"behavior":   stringProp("\"allow\" to approve the tool call, \"deny\" to reject it."),
+				},
+				[]string{"to", "request_id", "behavior"},
 			),
 		},
 	}
