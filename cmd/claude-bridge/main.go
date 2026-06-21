@@ -33,7 +33,6 @@ const (
 	cmdStop    = "stop"
 	cmdInstall = "install"
 	cmdVersion = "version"
-	cmdHook    = "hook"
 )
 
 // Environment variable names shared across the cmd layer.
@@ -108,8 +107,6 @@ func dispatch(sub string, args []string, cfg config.Config, logger *slog.Logger)
 		return runStop(cfg, logger)
 	case cmdInstall:
 		return runInstall(cfg, logger)
-	case cmdHook:
-		return runHook(cfg, logger)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n", sub)
 		usage()()
@@ -178,7 +175,6 @@ Usage:
   claude-bridge stop             Graceful shutdown via the PID file
   claude-bridge install          Install an always-on launchd agent (macOS)
   claude-bridge version          Print the build version
-  claude-bridge hook             UserPromptSubmit hook: inject pending peer messages
 
 Flags:
   --config string  Path to config file (default ~/.claude-bridge/config.yaml)

@@ -22,12 +22,10 @@ const unregisterTimeout = 200 * time.Millisecond
 // shim process: a control client for RPC and a second client dedicated to the
 // event subscription.
 type shim struct {
-	control     *daemonrpc.Client
-	subscribe   *daemonrpc.Client
-	sessionID   string
-	cfg         config.Config
-	projectPath string
-	logger      *slog.Logger
+	control   *daemonrpc.Client
+	subscribe *daemonrpc.Client
+	sessionID string
+	logger    *slog.Logger
 }
 
 // runMCP runs the stdio MCP shim: it ensures a daemon, registers a session,
@@ -93,31 +91,12 @@ func startShim(cfg config.Config, logger *slog.Logger) (*shim, error) {
 		return nil, err
 	}
 
-	// Record cwd → session_id so the UserPromptSubmit hook (a separate process)
-	// can find this session's inbox. Best-effort: the bridge works without it,
-	// only the auto-inject hook degrades.
-	writeSessionMap(cfg, projectPath, sessionID, logger)
-
 	return &shim{
-		control:     control,
-		subscribe:   subscribe,
-		sessionID:   sessionID,
-		cfg:         cfg,
-		projectPath: projectPath,
-		logger:      logger,
+		control:   control,
+		subscribe: subscribe,
+		sessionID: sessionID,
+		logger:    logger,
 	}, nil
-}
-
-// writeSessionMap records the shim's session_id under a hash of projectPath.
-func writeSessionMap(cfg config.Config, projectPath, sessionID string, logger *slog.Logger) {
-	if err := os.MkdirAll(config.SessionsDir(cfg), runtimeDirMode); err != nil {
-		logger.Debug("session map mkdir", "err", err)
-		return
-	}
-	path := config.SessionMapPath(cfg, projectPath)
-	if err := os.WriteFile(path, []byte(sessionID), pidFileMode); err != nil {
-		logger.Debug("session map write", "err", err)
-	}
 }
 
 // registerSession registers projectPath with the daemon and returns the
@@ -149,9 +128,8 @@ func (s *shim) unregister() {
 	}
 }
 
-// close tears down both daemon connections and removes the session mapping.
+// close tears down both daemon connections.
 func (s *shim) close() {
-	_ = os.Remove(config.SessionMapPath(s.cfg, s.projectPath))
 	_ = s.control.Close()
 	_ = s.subscribe.Close()
 }

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "claude-bridge": {
-      "command": "claude-bridge",
-      "args": ["mcp"]
-    }
-  }
-}

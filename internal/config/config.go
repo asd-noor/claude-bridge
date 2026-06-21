@@ -3,8 +3,6 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +24,7 @@ const (
 	defaultLogLevel        = "info"
 	defaultLogFormat       = "text"
 	defaultRuntimeDir      = ""
-	defaultChannelMode     = false
+	defaultChannelMode     = true
 )
 
 // Environment variable names for overrides (highest precedence).
@@ -45,11 +43,6 @@ const (
 	lockFilename = "daemon.lock"
 	pidFilename  = "daemon.pid"
 	logFilename  = "daemon.log"
-
-	// sessionsDirname holds per-project shim→session_id mapping files, keyed by
-	// a hash of the project path, so the UserPromptSubmit hook can resolve which
-	// bridge session owns a given working directory.
-	sessionsDirname = "sessions"
 )
 
 // runtimeDirPattern formats the derived per-user runtime directory name.
@@ -244,17 +237,4 @@ func PidPath(cfg Config) string {
 // LogPath returns the daemon log file path within the runtime directory.
 func LogPath(cfg Config) string {
 	return filepath.Join(RuntimeDir(cfg), logFilename)
-}
-
-// SessionsDir returns the directory holding per-project session_id mapping files.
-func SessionsDir(cfg Config) string {
-	return filepath.Join(RuntimeDir(cfg), sessionsDirname)
-}
-
-// SessionMapPath returns the mapping file path for a project directory. The file
-// records the bridge session_id of the shim running in that directory, letting a
-// separate process (the prompt hook) resolve the session that owns the cwd.
-func SessionMapPath(cfg Config, projectPath string) string {
-	sum := sha256.Sum256([]byte(projectPath))
-	return filepath.Join(SessionsDir(cfg), hex.EncodeToString(sum[:]))
 }

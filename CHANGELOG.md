@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.0] - 2026-06-21
+
+### Added
+
+- **Automatic delivery via Claude Code channels.** The shim pushes inbound peer
+  messages as `notifications/claude/channel` events, which start a turn even in a
+  **fully idle** session — lifting the long-standing "an idle session cannot be
+  woken" limitation. Launch a session as a channel with
+  `claude --dangerously-load-development-channels server:claude-bridge`. Controlled
+  by `broker.channel_mode` (env `CLAUDE_BRIDGE_CHANNEL_MODE`), now default `true`.
+
+### Removed
+
+- **The `UserPromptSubmit`/`Stop` hooks and the `claude-bridge hook` subcommand.**
+  Channel push reaches the model directly, so the hooks, the per-cwd continue
+  budget (`sessions/<hash>.cont`), and the `runtimeDir/sessions/` session map are
+  all gone. `poll_messages` remains as the manual fallback. The plugin is now
+  skill-only (the MCP server is registered separately); its bundled `.mcp.json`
+  and `hooks/` were removed.
+
+### Known gaps
+
+- Channel-mode reply chains have **no livelock guard** yet (the continue budget
+  only governed the removed hook path). A no-progress circuit breaker in the broker
+  is planned. Avoid unattended two-session auto-reply loops until then.
+
 ## [v1.1.3] - 2026-06-19
 
 ### Fixed

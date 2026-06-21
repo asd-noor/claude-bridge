@@ -1,11 +1,10 @@
 {
     "name": "claude-bridge",
-    "version": "1.1.3",
-    "description": "Local message broker bridging Claude Code sessions across projects on the same machine; provides bridge coordination tools (list_peers, broadcast, send_message, poll_messages) via an MCP shim.",
+    "version": "1.2.0",
+    "description": "Bridge-awareness skill for coordinating Claude Code sessions across projects on the same machine. The MCP server is registered separately (see README); delivery is via Claude Code channels.",
     "author": {
         "name": "Asaduzzaman Noor",
         "email": "contact@asaduzzaman-noor.com"
     },
-    "license": "GPL-3.0-or-later",
-    "mcpServers": "./.mcp.json"
+    "license": "GPL-3.0-or-later"
 }

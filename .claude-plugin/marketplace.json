@@ -6,14 +6,14 @@
     "email": "contact@asaduzzaman-noor.com"
   },
   "description": "Local message broker bridging Claude Code sessions across projects on the same machine.",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "plugins": [
     {
       "name": "claude-bridge",
       "source": "./plugin",
       "displayName": "Claude Bridge",
-      "description": "Coordinate Claude Code sessions across projects via bridge tools (list_peers, send_message, broadcast, poll_messages, get_peer_info) plus the bridge-awareness skill.",
-      "version": "1.1.3",
+      "description": "Bridge-awareness skill for coordinating Claude Code sessions across projects. The MCP server (list_peers, send_message, broadcast, poll_messages, get_peer_info) is registered separately; peer delivery uses Claude Code channels.",
+      "version": "1.2.0",
       "author": {
         "name": "Asaduzzaman Noor",
         "email": "contact@asaduzzaman-noor.com"

@@ -52,7 +52,6 @@ cmd/claude-bridge/      CLI + process lifecycle
   spawn.go              daemon auto-spawn (flock + fork/exec + poll-connect)
   mcp.go                stdio shim: connect, register, subscribe→stdout, MCP loop
   status.go             status / stop / install (launchd)
-  hook.go               UserPromptSubmit hook: inject pending peer messages
 
 internal/broker/        the source of truth (transport-agnostic)
   broker.go             actor: run loop, command channel, session/inbox state
@@ -142,49 +141,35 @@ drops (clean exit or dirty `kill`), so the peer list reflects only live shims.
 its connection.
 
 **Delivery.** Every message lands in the recipient's inbox (capacity
-`MaxInboxSize`, oldest evicted). Three ways it reaches the receiving Claude:
+`MaxInboxSize`, oldest evicted). Two ways it reaches the receiving Claude:
 
-- **Hook auto-inject (primary path to the model).** The plugin registers a
-  `UserPromptSubmit` hook that runs `claude-bridge hook`. On each turn the hook
-  resolves the session owning the cwd (via the session-map file, below), drains
-  that inbox from the daemon, and returns the pending messages as
-  `additionalContext` — so they appear in the model's context automatically,
-  without the model calling a tool. This is the only path that reliably surfaces
-  a message to the LLM.
-- **Subscribe / push.** The shim opens a second UDS connection, calls `subscribe`,
-  and forwards each event as an MCP `notifications/message` frame (level `warning`
-  when `in_reply_to` / `expects_reply` is set, else `info`). Note: Claude Code
-  treats these as logging and does **not** surface them to the model, so this path
-  is effectively a no-op for the LLM today; the broker's push machinery remains as
-  transport that a notification-aware host could use.
+- **Channel push (primary path to the model).** The shim opens a second UDS
+  connection, calls `subscribe`, and forwards each message event as a Claude Code
+  `notifications/claude/channel` frame. Claude Code wraps it in a `<channel>` tag
+  and **starts a turn on it even when the session is idle** — so a message reaches
+  the model without the user typing and without the model polling. See
+  **Channel mode** below for the wire format and its delivery guarantee.
 - **Poll.** `poll_messages` lets the model drain its inbox explicitly — the manual
-  fallback, and what the hook calls under the hood.
+  fallback, used when channel push wasn't loaded (the session wasn't launched as a
+  channel) or to sweep anything a dropped notification left queued.
 
-The same `claude-bridge hook` is also wired to the **`Stop`** event: when a turn
-ends with messages pending, it returns `{"decision":"block","reason": …}` so the
-session continues and processes them without a new user prompt — making an active
-session near-autonomous. A per-session **continue budget** (default 5, stored at
-`sessions/<hash>.cont`, reset on each user turn) caps consecutive auto-continues
-so two auto-replying agents cannot ping-pong forever; when exhausted the inbox is
-left intact for the next user turn.
-
-Because all paths read the same inbox, a message is delivered once: whoever drains
+Both paths read the same inbox, so a message is delivered once: whoever drains
 first gets it. Broadcasts are rate-limited per sender with a token bucket
 (`BroadcastBurst` / `BroadcastRefill`).
 
-**Limit.** An *active* session is near-autonomous: the `Stop` hook keeps it
-processing pending messages turn-over-turn (within the continue budget). But a
-*fully idle* session cannot be **woken** — Claude Code only acts on a turn, and
-nothing in the host starts one from an external event. The hooks surface messages
-the moment the session next takes a turn; truly unattended delivery needs a
-background (`claude -p`) receiver that polls. This limitation is specific to the
-default (hook) delivery mode; **channel mode** (below) lifts it, because Claude
-Code starts a turn on a channel notification even when the session is idle.
+> **Earlier design (removed in 1.2.0).** Delivery previously relied on a
+> `UserPromptSubmit`/`Stop` hook pair (`claude-bridge hook`) that injected the
+> inbox as `additionalContext` and continued turns to drain it, guarded by a
+> per-cwd continue budget, plus a `sessions/<sha256(cwd)>` map so the hook could
+> resolve cwd→`session_id`. Channel push reaches an idle session directly, so the
+> hooks, the continue budget, and the session map are all gone. The
+> `notifications/message` frame (which Claude Code treated as logging and never
+> surfaced to the model) is gone with them.
 
-**Session map.** So the hook (a separate process) can find the right inbox, the
-shim writes `runtimeDir/sessions/<sha256(cwd)>` = its `session_id` on register and
-removes it on exit. The hook reads it by cwd. Two sessions in the same cwd collide
-on this key (last writer wins) — rare, and only degrades the auto-inject hook.
+**No livelock guard yet.** The continue budget was the only loop breaker, and it
+only ever governed the hook path. Channel-mode reply chains are currently
+**unguarded**: two auto-replying sessions can ping-pong unattended. A no-progress
+circuit breaker in the broker is the planned backstop (not yet implemented).
 
 ### Tools exposed to Claude
 
@@ -194,12 +179,15 @@ shim injects `session_id` into each underlying daemon RPC.
 
 ### Channel mode
 
-When `broker.channel_mode` is enabled, the shim swaps the **Subscribe / push**
-delivery frame for a Claude Code **Channel** notification. This is an *alternative*
-delivery path that coexists with the hook path — channel mode does not retire the
-hooks. Everything is shim-side, in `internal/mcp/server.go`: the broker, the
-daemon, and the per-session pusher are unchanged, and `broker.Event` still flows
-over the daemon→shim subscription socket exactly as before.
+`broker.channel_mode` (default `true`) governs the push frame the shim emits. When
+on, the **Channel push** path above is active: inbound messages go out as Claude
+Code **Channel** notifications. When off, the shim falls back to the legacy
+`notifications/message` frame, which Claude Code treats as logging and never
+surfaces to the model — so with the hooks removed, `false` leaves `poll_messages`
+as the only path to the model. Everything is shim-side, in
+`internal/mcp/server.go`: the broker, the daemon, and the per-session pusher are
+unchanged, and `broker.Event` still flows over the daemon→shim subscription socket
+exactly as before.
 
 - **Initialize.** The shim declares
   `capabilities.experimental["claude/channel"] = {}` and sets a top-level
@@ -251,7 +239,6 @@ runtimeDir = $TMPDIR/claude-bridge-$UID   (mode 0700 — the access boundary)
   daemon.lock  (flock for the spawn/bind race)
   daemon.pid
   daemon.log   (when detached)
-  sessions/    (per-cwd session_id maps for the prompt hook)
 ```
 
 The `0700` directory mode is the security boundary: only the owning user can
@@ -295,11 +282,11 @@ strings (`"15m"`). Keys: `daemon.{runtime_dir, idle_timeout}`,
 `broker.{message_ttl, session_ttl, max_inbox_size, cleanup_tick, broadcast_burst,
 broadcast_refill, channel_mode}`, `log.{level, format}`.
 
-`broker.channel_mode` (bool, default `false`, env
-`CLAUDE_BRIDGE_CHANNEL_MODE`) is an opt-in, per-session switch that changes how
-the shim delivers inbound peer messages — see **Channel mode** below. When
-`false`, every path behaves exactly as documented above (the hooks plus
-`notifications/message`).
+`broker.channel_mode` (bool, default `true`, env `CLAUDE_BRIDGE_CHANNEL_MODE`)
+selects the push frame the shim emits — see **Channel mode** below. Default `true`
+because channels are now the only path that reaches the model automatically;
+setting it `false` reverts to the legacy `notifications/message` frame and leaves
+`poll_messages` as the sole route to the model.
 
 ---
 
@@ -324,7 +311,7 @@ install` builds and copies the binary to `~/.local/bin`.
   fire/cancel.
 - **End-to-end:** the real binary — cold-start auto-spawn, the 5-shim flock race
   (exactly one daemon survives), and a two-shim `send_message` →
-  `notifications/message` round trip.
+  `notifications/claude/channel` round trip.
 
 ---
 

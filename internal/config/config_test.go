@@ -69,6 +69,7 @@ func TestLoadYAMLOverlay(t *testing.T) {
 			CleanupTick:     Duration(30 * time.Second),
 			BroadcastBurst:  5,
 			BroadcastRefill: Duration(15 * time.Second),
+			ChannelMode:     true, // not set in sampleYAML → default carries through
 		},
 		Log: Log{Level: "debug", Format: "json"},
 	}
@@ -136,23 +137,23 @@ func TestChannelModeEnvOverride(t *testing.T) {
 	clearEnv(t)
 	missing := filepath.Join(t.TempDir(), "absent.yaml")
 
-	// Default is off.
+	// Default is on (channels are the delivery path).
 	got, err := Load(missing)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Broker.ChannelMode {
-		t.Fatalf("ChannelMode = true, want default false")
+	if !got.Broker.ChannelMode {
+		t.Fatalf("ChannelMode = false, want default true")
 	}
 
-	// Env flips it on.
-	t.Setenv(envChannelMode, "true")
+	// Env flips it off.
+	t.Setenv(envChannelMode, "false")
 	got, err = Load(missing)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !got.Broker.ChannelMode {
-		t.Fatalf("ChannelMode = false, want true from env override")
+	if got.Broker.ChannelMode {
+		t.Fatalf("ChannelMode = true, want false from env override")
 	}
 
 	// A bad value errors.

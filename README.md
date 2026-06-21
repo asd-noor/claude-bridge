@@ -97,15 +97,27 @@ manifest `.claude-plugin/marketplace.json`. Installing the plugin wires the MCP 
 /plugin install claude-bridge@claude-bridge
 ```
 
-The plugin's bundled `.mcp.json`, `skills/`, and `hooks/` load automatically once
-enabled. The `claude-bridge` binary still needs to be on your `PATH` (step above).
+The plugin ships the `bridge-awareness` skill (which teaches Claude when to reach
+for the bridge) and loads once enabled. The MCP server itself is registered
+separately (the `claude mcp add` step above), and the `claude-bridge` binary needs
+to be on your `PATH`.
 
-The bundled `UserPromptSubmit` hook is what makes incoming messages **show up on
-their own**: on each turn it injects any pending peer messages into the session's
-context, so you don't have to ask Claude to poll. (Claude Code does not surface MCP
-notifications to the model, so the MCP-server-only setup requires manual polling;
-the plugin's hook is the automatic path.) A fully idle session still isn't woken —
-messages appear the moment you next interact.
+### Automatic delivery (channels)
+
+Incoming messages **show up on their own** — including in a fully idle session —
+via Claude Code [channels](https://code.claude.com/docs/en/channels). The shim
+pushes each peer message as a `notifications/claude/channel` event, which starts a
+turn even when you're not typing. Because custom channels are a research preview,
+the session must be launched with the development flag:
+
+```sh
+claude --dangerously-load-development-channels server:claude-bridge
+```
+
+That warning is unavoidable for a self-built channel and is harmless. If a session
+isn't launched as a channel, messages still queue in the inbox — drain them with
+the `poll_messages` tool. Channel delivery is controlled by `broker.channel_mode`
+(default `true`).
 
 ## CLI subcommands
 
