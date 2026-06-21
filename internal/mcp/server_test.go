@@ -33,6 +33,11 @@ func newTestServer(c daemonClient) *Server {
 	return &Server{client: c, sessionID: "sess-1", tools: toolRegistry()}
 }
 
+// newChannelServer builds a Server with channel mode enabled.
+func newChannelServer(c daemonClient) *Server {
+	return &Server{client: c, sessionID: "sess-1", channelMode: true, tools: toolRegistry()}
+}
+
 // runOne dispatches a single non-notification request and returns its response.
 func runOne(t *testing.T, s *Server, req MCPRequest) MCPResponse {
 	t.Helper()
@@ -194,5 +199,95 @@ func TestForwardEventsLevels(t *testing.T) {
 	}
 	if levels[0] != levelInfo || levels[1] != levelWarning {
 		t.Fatalf("levels = %v, want [info warning]", levels)
+	}
+}
+
+func TestInitializeChannelMode(t *testing.T) {
+	s := newChannelServer(&fakeClient{})
+	resp := runOne(t, s, MCPRequest{ID: 1, Method: methodInitialize})
+	if resp.Error != nil {
+		t.Fatalf("initialize error: %+v", resp.Error)
+	}
+	res := resp.Result.(map[string]any)
+
+	caps := res["capabilities"].(map[string]any)
+	if _, ok := caps["tools"]; !ok {
+		t.Fatalf("tools capability dropped in channel mode: %v", caps)
+	}
+	exp, ok := caps["experimental"].(map[string]any)
+	if !ok {
+		t.Fatalf("experimental capability missing: %v", caps)
+	}
+	if _, ok := exp[experimentalChannelCapability]; !ok {
+		t.Fatalf("claude/channel capability missing: %v", exp)
+	}
+	if res["instructions"] != channelInstructions {
+		t.Fatalf("instructions = %v, want channel instructions", res["instructions"])
+	}
+}
+
+func TestForwardEventsChannelMode(t *testing.T) {
+	s := newChannelServer(&fakeClient{})
+	events := make(chan broker.Event, 3)
+	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
+		ID: "m1", From: "peer-a", Content: "hello",
+	}}
+	events <- broker.Event{Type: broker.EventMessage, Payload: broker.Message{
+		ID: "m2", From: "peer-b", Content: "answer me", InReplyTo: "m1", ExpectsReply: true,
+	}}
+	// Non-message events must be dropped in channel mode.
+	events <- broker.Event{Type: broker.EventPeerJoined, Payload: map[string]any{"session": "peer-c"}}
+	close(events)
+
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.ForwardEvents(ctx, events, &out)
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 channel frames (peer_joined dropped), got %d: %q", len(lines), out.String())
+	}
+
+	type channelFrame struct {
+		Method string `json:"method"`
+		Params struct {
+			Content string            `json:"content"`
+			Meta    map[string]string `json:"meta"`
+		} `json:"params"`
+	}
+
+	var f0 channelFrame
+	if err := json.Unmarshal([]byte(lines[0]), &f0); err != nil {
+		t.Fatalf("decode frame 0: %v", err)
+	}
+	if f0.Method != channelMethod {
+		t.Fatalf("frame 0 method = %q, want %q", f0.Method, channelMethod)
+	}
+	if f0.Params.Content != "hello" {
+		t.Fatalf("frame 0 content = %q", f0.Params.Content)
+	}
+	if f0.Params.Meta[metaFrom] != "peer-a" || f0.Params.Meta[metaID] != "m1" {
+		t.Fatalf("frame 0 meta = %v", f0.Params.Meta)
+	}
+	if _, ok := f0.Params.Meta[metaInReplyTo]; ok {
+		t.Fatalf("frame 0 in_reply_to should be omitted: %v", f0.Params.Meta)
+	}
+	if _, ok := f0.Params.Meta[metaExpectsReply]; ok {
+		t.Fatalf("frame 0 expects_reply should be omitted: %v", f0.Params.Meta)
+	}
+
+	var f1 channelFrame
+	if err := json.Unmarshal([]byte(lines[1]), &f1); err != nil {
+		t.Fatalf("decode frame 1: %v", err)
+	}
+	if f1.Params.Meta[metaFrom] != "peer-b" || f1.Params.Meta[metaID] != "m2" {
+		t.Fatalf("frame 1 meta = %v", f1.Params.Meta)
+	}
+	if f1.Params.Meta[metaInReplyTo] != "m1" {
+		t.Fatalf("frame 1 in_reply_to = %q, want m1", f1.Params.Meta[metaInReplyTo])
+	}
+	if f1.Params.Meta[metaExpectsReply] != metaTrue {
+		t.Fatalf("frame 1 expects_reply = %q, want %q", f1.Params.Meta[metaExpectsReply], metaTrue)
 	}
 }

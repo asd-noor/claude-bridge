@@ -66,7 +66,7 @@ internal/daemonrpc/     UDS transport
   client.go             shim side: Dial / Call / Subscribe / Close
 
 internal/mcp/           stdio MCP JSON-RPC server (runs inside the shim)
-  server.go             JSON-RPC loop, notifications/message forwarding
+  server.go             JSON-RPC loop, notifications/message (or channel) forwarding
   tools.go              5 tool handlers → daemon RPC
   schema.go             tool input schemas
 
@@ -177,7 +177,9 @@ processing pending messages turn-over-turn (within the continue budget). But a
 *fully idle* session cannot be **woken** — Claude Code only acts on a turn, and
 nothing in the host starts one from an external event. The hooks surface messages
 the moment the session next takes a turn; truly unattended delivery needs a
-background (`claude -p`) receiver that polls.
+background (`claude -p`) receiver that polls. This limitation is specific to the
+default (hook) delivery mode; **channel mode** (below) lifts it, because Claude
+Code starts a turn on a channel notification even when the session is idle.
 
 **Session map.** So the hook (a separate process) can find the right inbox, the
 shim writes `runtimeDir/sessions/<sha256(cwd)>` = its `session_id` on register and
@@ -189,6 +191,53 @@ on this key (last writer wins) — rare, and only degrades the auto-inject hook.
 `list_peers`, `send_message` (`to`, `content`, `in_reply_to?`, `expects_reply?`),
 `broadcast` (`content`), `poll_messages`, `get_peer_info` (`session_id`). The
 shim injects `session_id` into each underlying daemon RPC.
+
+### Channel mode
+
+When `broker.channel_mode` is enabled, the shim swaps the **Subscribe / push**
+delivery frame for a Claude Code **Channel** notification. This is an *alternative*
+delivery path that coexists with the hook path — channel mode does not retire the
+hooks. Everything is shim-side, in `internal/mcp/server.go`: the broker, the
+daemon, and the per-session pusher are unchanged, and `broker.Event` still flows
+over the daemon→shim subscription socket exactly as before.
+
+- **Initialize.** The shim declares
+  `capabilities.experimental["claude/channel"] = {}` and sets a top-level
+  `instructions` string (added to Claude's system prompt) so the model knows how to
+  handle inbound channel messages.
+- **Delivery frame.** Each inbound message event is pushed as
+  `notifications/claude/channel` with params `{ content: <body>, meta:
+  <string→string> }` instead of the `notifications/message` frame. Claude Code
+  wraps these in a `<channel source="claude-bridge" …>` tag and **starts a turn on
+  them even when the session is idle** — the point of the mode, and what lifts the
+  idle-session limit noted above.
+- **`meta`.** Carries `from` (peer `session_id`), `id` (message id), optional
+  `in_reply_to`, and `expects_reply="true"` when set. Values are strings only;
+  keys are identifiers (letters/digits/underscore). Claude Code auto-sets the
+  `source` attribute to the server name (`claude-bridge`), so sender identity
+  travels in the explicit `from` key, not `source`.
+- **Delivery guarantee.** Channel notifications are fire-and-forget — **not**
+  acknowledged. The notification await resolves on transport write, not on
+  processing; if the session didn't load the server as a channel (or org policy
+  blocks it), events are dropped silently. So the tiered "blocking" push policy
+  (above) governs only the internal Go-channel hand-off, never delivery
+  confirmation. The inbox + `poll_messages` remain the durable fallback — no data
+  loss; messages still queue in the broker inbox.
+
+**Launch (research preview).** Channel mode requires the shim to be launched as a
+bare MCP server behind Claude's dev flag:
+
+```
+claude --dangerously-load-development-channels server:claude-bridge
+```
+
+with the server registered in `~/.claude.json`:
+
+```json
+{ "mcpServers": { "claude-bridge": { "command": "claude-bridge", "args": ["mcp"] } } }
+```
+
+This is a preview contract that may change.
 
 ---
 
@@ -244,7 +293,13 @@ the cleanup).
 A missing file is not an error; malformed YAML is. Durations are written as
 strings (`"15m"`). Keys: `daemon.{runtime_dir, idle_timeout}`,
 `broker.{message_ttl, session_ttl, max_inbox_size, cleanup_tick, broadcast_burst,
-broadcast_refill}`, `log.{level, format}`.
+broadcast_refill, channel_mode}`, `log.{level, format}`.
+
+`broker.channel_mode` (bool, default `false`, env
+`CLAUDE_BRIDGE_CHANNEL_MODE`) is an opt-in, per-session switch that changes how
+the shim delivers inbound peer messages — see **Channel mode** below. When
+`false`, every path behaves exactly as documented above (the hooks plus
+`notifications/message`).
 
 ---
 

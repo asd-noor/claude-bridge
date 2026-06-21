@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -25,6 +26,7 @@ const (
 	defaultLogLevel        = "info"
 	defaultLogFormat       = "text"
 	defaultRuntimeDir      = ""
+	defaultChannelMode     = false
 )
 
 // Environment variable names for overrides (highest precedence).
@@ -34,6 +36,7 @@ const (
 	envMessageTTL  = "CLAUDE_BRIDGE_MESSAGE_TTL"
 	envSessionTTL  = "CLAUDE_BRIDGE_SESSION_TTL"
 	envLogLevel    = "CLAUDE_BRIDGE_LOG_LEVEL"
+	envChannelMode = "CLAUDE_BRIDGE_CHANNEL_MODE"
 )
 
 // Runtime artifact filenames living inside the runtime directory.
@@ -89,6 +92,11 @@ type Broker struct {
 	CleanupTick     Duration `yaml:"cleanup_tick"`
 	BroadcastBurst  int      `yaml:"broadcast_burst"`
 	BroadcastRefill Duration `yaml:"broadcast_refill"`
+
+	// ChannelMode opts the shim into delivering peer messages as Claude Code
+	// channel notifications (which wake an idle session) instead of log-level
+	// notifications/message frames. Default false.
+	ChannelMode bool `yaml:"channel_mode"`
 }
 
 // Log holds logging configuration.
@@ -118,6 +126,7 @@ func Defaults() Config {
 			CleanupTick:     Duration(defaultCleanupTick),
 			BroadcastBurst:  defaultBroadcastBurst,
 			BroadcastRefill: Duration(defaultBroadcastRefill),
+			ChannelMode:     defaultChannelMode,
 		},
 		Log: Log{
 			Level:  defaultLogLevel,
@@ -174,6 +183,23 @@ func applyEnv(cfg *Config) error {
 	if v, ok := os.LookupEnv(envLogLevel); ok {
 		cfg.Log.Level = v
 	}
+	if err := envBool(envChannelMode, &cfg.Broker.ChannelMode); err != nil {
+		return err
+	}
+	return nil
+}
+
+// envBool parses the named env var as a boolean into dst when set.
+func envBool(name string, dst *bool) error {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return nil
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return fmt.Errorf("invalid bool for %s=%q: %w", name, v, err)
+	}
+	*dst = parsed
 	return nil
 }
 

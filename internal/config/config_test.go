@@ -132,6 +132,36 @@ func TestEnvOverridesWinOverFile(t *testing.T) {
 	}
 }
 
+func TestChannelModeEnvOverride(t *testing.T) {
+	clearEnv(t)
+	missing := filepath.Join(t.TempDir(), "absent.yaml")
+
+	// Default is off.
+	got, err := Load(missing)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Broker.ChannelMode {
+		t.Fatalf("ChannelMode = true, want default false")
+	}
+
+	// Env flips it on.
+	t.Setenv(envChannelMode, "true")
+	got, err = Load(missing)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !got.Broker.ChannelMode {
+		t.Fatalf("ChannelMode = false, want true from env override")
+	}
+
+	// A bad value errors.
+	t.Setenv(envChannelMode, "not-a-bool")
+	if _, err := Load(missing); err == nil {
+		t.Fatalf("Load() = nil error, want error for invalid bool")
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -231,7 +261,7 @@ func TestArtifactPaths(t *testing.T) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		envRuntimeDir, envIdleTimeout, envMessageTTL, envSessionTTL, envLogLevel,
+		envRuntimeDir, envIdleTimeout, envMessageTTL, envSessionTTL, envLogLevel, envChannelMode,
 	} {
 		t.Setenv(name, "")
 		os.Unsetenv(name)

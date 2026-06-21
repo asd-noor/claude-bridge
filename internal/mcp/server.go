@@ -2,7 +2,9 @@
 // claude-bridge shim. It speaks the Model Context Protocol on stdin/stdout to
 // Claude and delegates every tool call to a daemonrpc.Client, injecting the
 // shim's own session_id so Claude never handles it. Subscription events from
-// the daemon are pushed back to Claude as notifications/message frames.
+// the daemon are pushed back to Claude as notifications/message frames, or, when
+// channel mode is enabled, as notifications/claude/channel frames that wake an
+// idle session.
 package mcp
 
 import (
@@ -44,6 +46,33 @@ const (
 
 // notificationMethod is the MCP frame used to push daemon events to Claude.
 const notificationMethod = "notifications/message"
+
+// channelMethod is the MCP frame used to push peer messages to Claude when
+// channel mode is enabled; it wakes an idle session rather than being logged.
+const channelMethod = "notifications/claude/channel"
+
+// experimentalChannelCapability is the capabilities.experimental key declaring
+// channel support in the initialize result.
+const experimentalChannelCapability = "claude/channel"
+
+// channelMeta keys carried on a channel notification. Values are strings only.
+const (
+	metaFrom         = "from"
+	metaID           = "id"
+	metaInReplyTo    = "in_reply_to"
+	metaExpectsReply = "expects_reply"
+	metaTrue         = "true"
+)
+
+// channelInstructions is the MCP initialize instructions string injected into
+// Claude's system prompt when channel mode is enabled.
+const channelInstructions = "Peer Claude Code sessions reach you over this channel. " +
+	"Events arrive as <channel source=\"claude-bridge\" from=\"...\" ...> blocks; " +
+	"the source attribute is always \"claude-bridge\", so use the from attribute " +
+	"(the peer's session_id) to identify the sender. " +
+	"When a message has expects_reply=\"true\" or an in_reply_to attribute, reply by " +
+	"calling the send_message tool with to set to the from value and in_reply_to set to " +
+	"the message id. Otherwise, act on the content directly."
 
 // Notification levels per push intent.
 const (
@@ -88,21 +117,25 @@ func errInvalidParams(err error) error { return paramError{cause: err} }
 // cmd layer dials the daemon, registers to obtain sessionID, and constructs the
 // server with a ready client.
 type Server struct {
-	client    daemonClient
-	sessionID string
-	tools     map[string]toolHandler
+	client      daemonClient
+	sessionID   string
+	channelMode bool
+	tools       map[string]toolHandler
 
 	mu  sync.Mutex // guards all writes to the stdout writer
 	out io.Writer
 }
 
 // NewServer constructs an MCP server bound to a daemon client and the shim's
-// session identity. The same sessionID is injected into every daemon RPC.
-func NewServer(client *daemonrpc.Client, sessionID string) *Server {
+// session identity. The same sessionID is injected into every daemon RPC. When
+// channelMode is true, peer messages are pushed as channel notifications that
+// wake an idle session instead of log-level notifications/message frames.
+func NewServer(client *daemonrpc.Client, sessionID string, channelMode bool) *Server {
 	return &Server{
-		client:    client,
-		sessionID: sessionID,
-		tools:     toolRegistry(),
+		client:      client,
+		sessionID:   sessionID,
+		channelMode: channelMode,
+		tools:       toolRegistry(),
 	}
 }
 
@@ -162,7 +195,7 @@ func (s *Server) dispatch(req MCPRequest) (MCPResponse, bool) {
 
 	switch req.Method {
 	case methodInitialize:
-		return successResponse(req.ID, initializeResult()), false
+		return successResponse(req.ID, s.initializeResult()), false
 	case methodToolsList:
 		return successResponse(req.ID, toolsListResult()), false
 	case methodToolsCall:
@@ -211,10 +244,10 @@ func errorCode(err error) int {
 	return codeInternalError
 }
 
-// ForwardEvents pumps subscription events to stdout as notifications/message
-// frames, in channel order with no buffering. It returns when events closes or
-// ctx is cancelled. Writes share the server's output mutex so a pushed frame
-// never interleaves with a tool response.
+// ForwardEvents pumps subscription events to stdout, in channel order with no
+// buffering. It returns when events closes or ctx is cancelled. Writes share the
+// server's output mutex so a pushed frame never interleaves with a tool response.
+// A nil frame (e.g. a non-message event in channel mode) is dropped.
 func (s *Server) ForwardEvents(ctx context.Context, events <-chan broker.Event, out io.Writer) {
 	for {
 		select {
@@ -224,7 +257,10 @@ func (s *Server) ForwardEvents(ctx context.Context, events <-chan broker.Event, 
 			if !ok {
 				return
 			}
-			frame := eventNotification(ev)
+			frame := s.eventNotification(ev)
+			if frame == nil {
+				continue
+			}
 			if err := s.writeRaw(out, frame); err != nil {
 				return
 			}
@@ -232,9 +268,14 @@ func (s *Server) ForwardEvents(ctx context.Context, events <-chan broker.Event, 
 	}
 }
 
-// eventNotification builds a notifications/message frame for a broker event.
-// The level is "warning" when the message threads a reply or asks for one.
-func eventNotification(ev broker.Event) map[string]any {
+// eventNotification builds the push frame for a broker event. In channel mode it
+// emits a notifications/claude/channel frame for message events and nil for
+// non-message events (peer_joined/peer_left are not actionable peer messages).
+// Otherwise it emits the legacy notifications/message frame.
+func (s *Server) eventNotification(ev broker.Event) map[string]any {
+	if s.channelMode {
+		return channelNotification(ev)
+	}
 	return map[string]any{
 		"jsonrpc": jsonRPCVersion,
 		"method":  notificationMethod,
@@ -244,6 +285,40 @@ func eventNotification(ev broker.Event) map[string]any {
 			"data":   eventData(ev),
 		},
 	}
+}
+
+// channelNotification builds a notifications/claude/channel frame for a message
+// event, or nil for any non-message event. The params carry the message body as
+// content plus a string→string meta map identifying the sender and threading.
+func channelNotification(ev broker.Event) map[string]any {
+	msg, ok := messagePayload(ev)
+	if !ok {
+		return nil
+	}
+	return map[string]any{
+		"jsonrpc": jsonRPCVersion,
+		"method":  channelMethod,
+		"params": map[string]any{
+			"content": msg.Content,
+			"meta":    channelMeta(msg),
+		},
+	}
+}
+
+// channelMeta builds the string→string meta map for a channel notification.
+// in_reply_to is omitted when empty; expects_reply is included only when true.
+func channelMeta(msg broker.Message) map[string]string {
+	meta := map[string]string{
+		metaFrom: msg.From,
+		metaID:   msg.ID,
+	}
+	if msg.InReplyTo != "" {
+		meta[metaInReplyTo] = msg.InReplyTo
+	}
+	if msg.ExpectsReply {
+		meta[metaExpectsReply] = metaTrue
+	}
+	return meta
 }
 
 // messagePayload extracts a broker.Message from an event payload. Events that
@@ -325,18 +400,28 @@ func (s *Server) writeRaw(out io.Writer, v any) error {
 }
 
 // initializeResult builds the initialize response: protocol version, server
-// capabilities (advertising tools), and server info.
-func initializeResult() map[string]any {
-	return map[string]any{
+// capabilities (advertising tools), and server info. In channel mode it also
+// declares the experimental claude/channel capability and an instructions
+// string injected into Claude's system prompt.
+func (s *Server) initializeResult() map[string]any {
+	capabilities := map[string]any{
+		"tools": map[string]any{},
+	}
+	result := map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities": map[string]any{
-			"tools": map[string]any{},
-		},
+		"capabilities":    capabilities,
 		"serverInfo": map[string]any{
 			"name":    serverName,
 			"version": serverVersion,
 		},
 	}
+	if s.channelMode {
+		capabilities["experimental"] = map[string]any{
+			experimentalChannelCapability: map[string]any{},
+		}
+		result["instructions"] = channelInstructions
+	}
+	return result
 }
 
 // toolsListResult builds the tools/list response.

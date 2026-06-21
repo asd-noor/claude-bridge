@@ -41,7 +41,7 @@ func runMCP(cfg config.Config, logger *slog.Logger) int {
 	}
 	defer sh.close()
 
-	server := mcp.NewServer(sh.control, sh.sessionID)
+	server := mcp.NewServer(sh.control, sh.sessionID, cfg.Broker.ChannelMode)
 
 	ctx, cancel := signalContext()
 	defer cancel()
